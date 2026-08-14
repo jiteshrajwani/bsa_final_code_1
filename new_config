@@ -1,12 +1,3 @@
-display(
-    spark.table(TBL_PIPELINE_LOG)
-    .filter(col("statement_hash") == "17b443d51ba8e8e7efcbed88f3ef41268160ecd0d0cdab11bc92d0365b81b38a")
-    .select(
-        "classification_status", "classification_attempt_count", "classification_logic_version",
-        "validation_status", "validation_attempt_count", "validation_logic_version",
-        "merge_status", "merge_attempt_count", "merge_logic_version",
-    )
-)
 import uuid as _uuid
 
 dbutils.widgets.text('run_id',"","Databricks Job run_id (auto-generated if blank)")
@@ -278,7 +269,17 @@ def get_eligible_statements(stage: str, candidates_df, key_col: str = "statement
     eligible_mask = (
         F.col("_status").isNull()
         | ((F.col("_status") == "FAILED") & (F.col("_attempts") < F.lit(RETRY_CAP)))
-        | (F.col("_version") < F.lit(current_version))
+        # NULL logic_version means this row predates version tracking
+        # entirely (e.g. processed before this column existed, or before a
+        # later stage's tracking column was added). NULL < current_version
+        # evaluates to NULL in Spark, not True, and .filter() drops NULL
+        # rows same as False -- so without the coalesce, these statements
+        # would be silently frozen at whatever old logic produced them,
+        # forever, regardless of how many times STAGE_LOGIC_VERSIONS gets
+        # bumped. Coalescing to -1 guarantees they're always older than any
+        # real version (which starts at 1) and get one fresh pass under
+        # current code, then behave normally from then on.
+        | (F.coalesce(F.col("_version"), F.lit(-1)) < F.lit(current_version))
     )
 
     return joined.filter(eligible_mask).select(candidates_df["*"])
