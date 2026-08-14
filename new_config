@@ -1,3 +1,12 @@
+display(
+    spark.table(TBL_PIPELINE_LOG)
+    .filter(col("statement_hash") == "17b443d51ba8e8e7efcbed88f3ef41268160ecd0d0cdab11bc92d0365b81b38a")
+    .select(
+        "classification_status", "classification_attempt_count", "classification_logic_version",
+        "validation_status", "validation_attempt_count", "validation_logic_version",
+        "merge_status", "merge_attempt_count", "merge_logic_version",
+    )
+)
 import uuid as _uuid
 
 dbutils.widgets.text('run_id',"","Databricks Job run_id (auto-generated if blank)")
