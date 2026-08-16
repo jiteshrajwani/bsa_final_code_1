@@ -290,7 +290,8 @@ async function handleFile(file) {
     statusLine.textContent = 'Upload failed: ' + err.message;
     return;
   }
-  const { run_id } = await uploadResp.json();
+
+  const { run_id, statement_hash } = await uploadResp.json();
 
   setStamp('received', 'done');
   setStamp('processing', 'active');
@@ -299,13 +300,13 @@ async function handleFile(file) {
   pollStatus(run_id);
 }
 
-async function pollStatus(runId) {
+async function pollStatus(runId, statementHash) {
   try {
     const resp = await fetch(`/api/status/${runId}`);
     const data = await resp.json();
 
     if (!data.done) {
-      setTimeout(() => pollStatus(runId), 3000);
+      setTimeout(() => pollStatus(runId, statementHash), 3000);
       return;
     }
 
@@ -319,15 +320,15 @@ async function pollStatus(runId) {
     setStamp('validated', 'active');
     statusLine.textContent = 'Fetching results...';
 
-    const resultResp = await fetch(`/api/result/${runId}`);
+    const resultResp = await fetch(`/api/result/${statementHash}`);
     const result = await resultResp.json();
     setStamp('validated', 'done');
-    document.getElementById('downloadBtn').href = `/api/download-transactions/${runId}`;
+    document.getElementById('downloadBtn').href = `/api/download-transactions/${statementHash}`;
     renderResult(result);
 
   } catch (err) {
     statusLine.textContent = 'Error checking status: ' + err.message;
-    setTimeout(() => pollStatus(runId), 4000);
+    setTimeout(() => pollStatus(runId, statementHash), 4000);
   }
 }
 
