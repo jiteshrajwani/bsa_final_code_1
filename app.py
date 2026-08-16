@@ -34,7 +34,7 @@ class SizedBytesIO(BytesIO):
     def __len__(self):
         return self.getbuffer().nbytes
 
-
+# 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -54,7 +54,7 @@ app = FastAPI()
 # Only used for actions granted via app.yaml's "resources" block.
 app_client = WorkspaceClient()
 
-RUN_SNAPSHOTS = {}
+# RUN_SNAPSHOTS = {}
 
 
 def get_user_client(request: Request) -> WorkspaceClient:
@@ -88,15 +88,16 @@ async def upload_pdf(request: Request, file: UploadFile = File(...)):
     statement_hash = hashlib.sha256(contents).hexdigest() # same hash the pipeline computes
     w_user.files.upload(dest_path, SizedBytesIO(contents), overwrite=True)
 
-    snapshot_time = datetime.now(timezone.utc).isoformat()
+    # snapshot_time = datetime.now(timezone.utc).isoformat()
 
     # Trigger the job as the app itself (only needs CAN_MANAGE_RUN, granted
     # via the "resources" block in app.yaml - no catalog access needed).
     run = app_client.jobs.run_now(job_id=JOB_ID)
     run_id = run.run_id
     # RUN_SNAPSHOTS[run_id] = snapshot_time
-    RUN_SNAPSHOTS[run_id] = {'snapshot_time':snapshot_time, "statement_hash":statement_hash}
-    return {"run_id": run_id, "file_saved_as": unique_name}
+    # RUN_SNAPSHOTS[run_id] = {'snapshot_time':snapshot_time, "statement_hash":statement_hash}
+    return {'run_id':run_id,"file_saved_as": unique_name,"statement_hash":statement_hash}
+    # return {"run_id": run_id, "file_saved_as": unique_name}
 
 
 @app.get("/api/status/{run_id}")
@@ -118,15 +119,15 @@ def get_status(run_id: int):
     }
 
 
-@app.get("/api/result/{run_id}")
-def get_result(request: Request, run_id: int):
+@app.get("/api/result/{statement_hash}")
+def get_result(request: Request, statement_hash:str):
     w_user = get_user_client(request)  # query as the user (needs table access)
 
 
     # snapshot_time = RUN_SNAPSHOTS.get(run_id)
-    run_data = RUN_SNAPSHOTS.get(run_id)
-    if run_data is None:
-        raise HTTPException(404, "Unknown run_id")
+    # run_data = RUN_SNAPSHOTS.get(run_id)
+    # if run_data is None:
+    #     raise HTTPException(404, "Unknown run_id")
 
     # query = f"""
     #     SELECT *
@@ -138,7 +139,7 @@ def get_result(request: Request, run_id: int):
     query = f"""
         SELECT *
         FROM {TABLE_NAME}
-        WHERE statement_hash = '{run_data["statement_hash"]}'
+        WHERE statement_hash = '{statement_hash}'
     """
 
 
@@ -157,8 +158,8 @@ def get_result(request: Request, run_id: int):
     return {"columns": columns, "rows": rows}
 
 
-@app.get("/api/download-transactions/{run_id}")
-def download_transactions(request: Request,run_id:int):
+@app.get("/api/download-transactions/{statement_hash}")
+def download_transactions(request: Request,statement_hash:str):
     """
     Streams the entire bsa_classified_transactions table as an .xlsx file.
 
@@ -169,13 +170,13 @@ def download_transactions(request: Request,run_id:int):
     reading it in one call.
     """
     w_user = get_user_client(request)  # query as the user (needs table access)
-    run_data = RUN_SNAPSHOTS.get(run_id) 
-    if run_data is None:
-        raise HTTPException(404,"Unknown run_id")
+    # run_data = RUN_SNAPSHOTS.get(run_id) 
+    # if run_data is None:
+    #     raise HTTPException(404,"Unknown run_id")
     
     query = f"""
     SELECT * FROM {TRANSACTIONS_TABLE}
-    where statement_hash = '{run_data["statement_hash"]}'
+    where statement_hash = '{statement_hash}'
     order by line_no
     """
 
