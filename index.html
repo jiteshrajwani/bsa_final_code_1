@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Statement Ledger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Serif:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#1B2A3D;
+    --paper:#F1ECE0;
+    --paper-card:#FBF8F2;
+    --teal:#2F6F5E;
+    --stamp:#A63D40;
+    --slate:#6B7280;
+    --line: rgba(27,42,61,0.14);
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--paper);
+    color:var(--ink);
+    font-family:'IBM Plex Sans', sans-serif;
+    min-height:100vh;
+    display:flex;
+    justify-content:center;
+    padding:48px 20px;
+  }
+  .passbook{
+    width:100%;
+    max-width:640px;
+  }
+  .cover{
+    background:var(--ink);
+    color:var(--paper);
+    border-radius:10px 10px 0 0;
+    padding:28px 32px;
+    position:relative;
+    overflow:hidden;
+  }
+  .cover::after{
+    content:"";
+    position:absolute;
+    right:-40px; top:-40px;
+    width:140px; height:140px;
+    border:1px solid rgba(241,236,224,0.15);
+    border-radius:50%;
+  }
+  .eyebrow{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:11px;
+    letter-spacing:0.14em;
+    text-transform:uppercase;
+    color:rgba(241,236,224,0.6);
+    margin:0 0 8px;
+  }
+  .cover h1{
+    font-family:'IBM Plex Serif', serif;
+    font-weight:600;
+    font-size:28px;
+    margin:0;
+  }
+  .card{
+    background:var(--paper-card);
+    border-radius:0 0 10px 10px;
+    box-shadow:0 12px 32px rgba(27,42,61,0.12);
+    padding:32px;
+  }
+
+  /* deposit-slip upload zone */
+  .slip{
+    border:1.5px dashed rgba(27,42,61,0.3);
+    border-radius:6px;
+    padding:28px 20px;
+    text-align:center;
+    position:relative;
+    cursor:pointer;
+    transition:border-color .2s, background .2s;
+  }
+  .slip:hover{ border-color:var(--teal); background:rgba(47,111,94,0.04); }
+  .slip.drag{ border-color:var(--teal); background:rgba(47,111,94,0.07); }
+  .slip svg{ width:28px; height:28px; margin-bottom:10px; color:var(--slate); }
+  .slip-title{ font-weight:500; font-size:15px; margin:0 0 4px; }
+  .slip-sub{ font-size:13px; color:var(--slate); margin:0; }
+  #fileInput{ display:none; }
+
+  .filename{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:13px;
+    color:var(--teal);
+    margin-top:14px;
+    text-align:center;
+  }
+
+  /* progress / stamps */
+  .stamps{
+    display:flex;
+    justify-content:space-between;
+    margin:28px 0 8px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size:11px;
+    letter-spacing:0.08em;
+    text-transform:uppercase;
+  }
+  .stamp{
+    flex:1;
+    text-align:center;
+    padding:10px 4px;
+    color:var(--slate);
+    border-bottom:2px solid var(--line);
+    transition:color .3s, border-color .3s;
+  }
+  .stamp.active{ color:var(--teal); border-color:var(--teal); }
+  .stamp.done{ color:var(--ink); border-color:var(--ink); }
+  .stamp.error{ color:var(--stamp); border-color:var(--stamp); }
+
+  .status-line{
+    text-align:center;
+    font-size:13px;
+    color:var(--slate);
+    min-height:20px;
+    margin-bottom:6px;
+  }
+
+  /* results */
+  .summary{
+    font-family:'IBM Plex Serif', serif;
+    font-size:15px;
+    line-height:1.6;
+    background:rgba(47,111,94,0.06);
+    border-left:3px solid var(--teal);
+    padding:16px 18px;
+    border-radius:0 6px 6px 0;
+    margin:24px 0;
+  }
+  table{
+    width:100%;
+    border-collapse:collapse;
+    font-family:'IBM Plex Mono', monospace;
+    font-size:12.5px;
+  }
+  th, td{
+    text-align:left;
+    padding:9px 10px;
+    border-bottom:1px solid var(--line);
+    white-space:nowrap;
+    max-width:220px;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  th{
+    font-family:'IBM Plex Sans', sans-serif;
+    font-weight:600;
+    font-size:11px;
+    letter-spacing:0.05em;
+    text-transform:uppercase;
+    color:var(--slate);
+  }
+  .table-wrap{ overflow-x:auto; border:1px solid var(--line); border-radius:6px; }
+
+  .reset-link{
+    display:block;
+    text-align:center;
+    margin-top:20px;
+    font-size:13px;
+    color:var(--slate);
+    cursor:pointer;
+    text-decoration:underline;
+  }
+
+  .download-btn{
+    display:block;
+    text-align:center;
+    margin-top:20px;
+    padding:12px 20px;
+    background:var(--teal);
+    color:var(--paper-card);
+    font-family:'IBM Plex Sans', sans-serif;
+    font-weight:500;
+    font-size:14px;
+    border-radius:6px;
+    text-decoration:none;
+    transition:background .2s;
+  }
+  .download-btn:hover{ background:#255c4e; }
+
+  .hidden{ display:none !important; }
+</style>
+</head>
+<body>
+
+<div class="passbook">
+  <div class="cover">
+    <p class="eyebrow">Bank Statement Analyzer</p>
+    <h1>Statement Ledger</h1>
+  </div>
+
+  <div class="card">
+
+    <div id="uploadStage">
+      <div class="slip" id="dropzone">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M12 16V4M12 4l-4 4M12 4l4 4M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <p class="slip-title">Deposit a statement</p>
+        <p class="slip-sub">Click or drag a PDF here to begin</p>
+      </div>
+      <input type="file" id="fileInput" accept="application/pdf">
+      <div class="filename hidden" id="filename"></div>
+    </div>
+
+    <div id="progressStage" class="hidden">
+      <div class="stamps">
+        <div class="stamp" id="stamp-received">Received</div>
+        <div class="stamp" id="stamp-processing">Processing</div>
+        <div class="stamp" id="stamp-validated">Validated</div>
+      </div>
+      <div class="status-line" id="statusLine">Uploading...</div>
+    </div>
+
+    <div id="resultStage" class="hidden">
+      <div class="summary" id="summaryText"></div>
+      <div class="table-wrap">
+        <table id="resultTable"></table>
+      </div>
+      <a id="downloadBtn" class="download-btn" href="/api/download-transactions/${runId}">Download all transactions (Excel)</a>
+      <span class="reset-link" id="resetLink">Deposit another statement</span>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const filenameEl = document.getElementById('filename');
+const uploadStage = document.getElementById('uploadStage');
+const progressStage = document.getElementById('progressStage');
+const resultStage = document.getElementById('resultStage');
+const statusLine = document.getElementById('statusLine');
+const resetLink = document.getElementById('resetLink');
+
+const stamps = {
+  received: document.getElementById('stamp-received'),
+  processing: document.getElementById('stamp-processing'),
+  validated: document.getElementById('stamp-validated'),
+};
+
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropzone.classList.remove('drag');
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files.length) handleFile(fileInput.files[0]);
+});
+resetLink.addEventListener('click', () => location.reload());
+
+function setStamp(name, state) {
+  stamps[name].classList.remove('active', 'done', 'error');
+  if (state) stamps[name].classList.add(state);
+}
+
+async function handleFile(file) {
+  if (file.type !== 'application/pdf') {
+    alert('Please choose a PDF file.');
+    return;
+  }
+  filenameEl.textContent = file.name;
+  filenameEl.classList.remove('hidden');
+
+  uploadStage.classList.add('hidden');
+  progressStage.classList.remove('hidden');
+  setStamp('received', 'active');
+  statusLine.textContent = 'Uploading...';
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  let uploadResp;
+  try {
+    uploadResp = await fetch('/api/upload', { method: 'POST', body: formData });
+    if (!uploadResp.ok) throw new Error(await uploadResp.text());
+  } catch (err) {
+    setStamp('received', 'error');
+    statusLine.textContent = 'Upload failed: ' + err.message;
+    return;
+  }
+  const { run_id } = await uploadResp.json();
+
+  setStamp('received', 'done');
+  setStamp('processing', 'active');
+  statusLine.textContent = 'Running pipeline...';
+
+  pollStatus(run_id);
+}
+
+async function pollStatus(runId) {
+  try {
+    const resp = await fetch(`/api/status/${runId}`);
+    const data = await resp.json();
+
+    if (!data.done) {
+      setTimeout(() => pollStatus(runId), 3000);
+      return;
+    }
+
+    if (!data.success) {
+      setStamp('processing', 'error');
+      statusLine.textContent = `Pipeline failed (${data.result_state || data.life_cycle_state}).`;
+      return;
+    }
+
+    setStamp('processing', 'done');
+    setStamp('validated', 'active');
+    statusLine.textContent = 'Fetching results...';
+
+    const resultResp = await fetch(`/api/result/${runId}`);
+    const result = await resultResp.json();
+    setStamp('validated', 'done');
+    renderResult(result);
+
+  } catch (err) {
+    statusLine.textContent = 'Error checking status: ' + err.message;
+    setTimeout(() => pollStatus(runId), 4000);
+  }
+}
+
+function renderResult(result) {
+  progressStage.classList.add('hidden');
+  resultStage.classList.remove('hidden');
+
+  const { columns, rows } = result;
+
+  if (!rows || rows.length === 0) {
+    document.getElementById('summaryText').textContent =
+      'No rows found for this statement yet — the pipeline may still be finalizing.';
+    return;
+  }
+
+  const row = rows[0];
+  const col = (name) => {
+    const idx = columns.indexOf(name);
+    return idx >= 0 ? row[idx] : null;
+  };
+
+  const totalTxn = col('total_transactions');
+  const bankFormat = col('bank_format');
+  const inflow = col('total_inflow');
+
+  document.getElementById('summaryText').textContent =
+    `Processed a ${bankFormat || 'statement'} with ${totalTxn ?? '—'} transactions` +
+    (inflow ? ` and total inflow of ${inflow}.` : '.');
+
+  const table = document.getElementById('resultTable');
+  table.innerHTML = '';
+  const thead = document.createElement('tr');
+  columns.forEach(c => {
+    const th = document.createElement('th');
+    th.textContent = c;
+    thead.appendChild(th);
+  });
+  table.appendChild(thead);
+
+  rows.forEach(r => {
+    const tr = document.createElement('tr');
+    r.forEach(val => {
+      const td = document.createElement('td');
+      td.textContent = val;
+      tr.appendChild(td);
+    });
+    table.appendChild(tr);
+  });
+}
+</script>
+
+</body>
+</html>
