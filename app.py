@@ -16,7 +16,7 @@ Flow:
   5. User can also download the full bsa_classified_transactions table
      as an Excel file at any time -> as the user
 """
-
+import hashlib
 import os
 import uuid
 from io import BytesIO
@@ -85,6 +85,7 @@ async def upload_pdf(request: Request, file: UploadFile = File(...)):
     dest_path = f"{VOLUME_PATH}/{unique_name}"
 
     contents = await file.read()
+    statement_hash = hashlib.sha256(contents).hexdigest() # same hash the pipeline computes
     w_user.files.upload(dest_path, SizedBytesIO(contents), overwrite=True)
 
     snapshot_time = datetime.now(timezone.utc).isoformat()
@@ -93,8 +94,8 @@ async def upload_pdf(request: Request, file: UploadFile = File(...)):
     # via the "resources" block in app.yaml - no catalog access needed).
     run = app_client.jobs.run_now(job_id=JOB_ID)
     run_id = run.run_id
-    RUN_SNAPSHOTS[run_id] = snapshot_time
-
+    # RUN_SNAPSHOTS[run_id] = snapshot_time
+    RUN_SNAPSHOTS[run_id] = {'snapshot_time':snapshot_time, "statement_hash":statement_hash}
     return {"run_id": run_id, "file_saved_as": unique_name}
 
 
@@ -121,16 +122,25 @@ def get_status(run_id: int):
 def get_result(request: Request, run_id: int):
     w_user = get_user_client(request)  # query as the user (needs table access)
 
-    snapshot_time = RUN_SNAPSHOTS.get(run_id)
-    if snapshot_time is None:
+
+    # snapshot_time = RUN_SNAPSHOTS.get(run_id)
+    run_data = RUN_SNAPSHOTS.get(run_id)
+    if run_data is None:
         raise HTTPException(404, "Unknown run_id")
+
+    # query = f"""
+    #     SELECT *
+    #     FROM {TABLE_NAME}
+    #     WHERE computed_at > TIMESTAMP('{snapshot_time}')
+    #     ORDER BY computed_at DESC
+    # """
 
     query = f"""
         SELECT *
         FROM {TABLE_NAME}
-        WHERE computed_at > TIMESTAMP('{snapshot_time}')
-        ORDER BY computed_at DESC
+        WHERE statement_hash = {run_data["statement_hash"]}')
     """
+
 
     result = w_user.statement_execution.execute_statement(
         warehouse_id=WAREHOUSE_ID,
@@ -148,7 +158,7 @@ def get_result(request: Request, run_id: int):
 
 
 @app.get("/api/download-transactions")
-def download_transactions(request: Request):
+def download_transactions(request: Request,run_id:int):
     """
     Streams the entire bsa_classified_transactions table as an .xlsx file.
 
@@ -159,8 +169,17 @@ def download_transactions(request: Request):
     reading it in one call.
     """
     w_user = get_user_client(request)  # query as the user (needs table access)
+    run_data = RUN_SNAPSHOTS.get(run_id) 
+    if run_data is None:
+        raise HTTPException(404,"Unknown run_id")
+    
+    query = f"""
+    SELECT * FROM {TRANSACTIONS_TABLE}
+    where statement_hash = '{run_data["statement_hash"]}'
+    order by line_no
+    """
 
-    query = f"SELECT * FROM {TRANSACTIONS_TABLE}"
+    # query = f"SELECT * FROM {TRANSACTIONS_TABLE}"
 
     result = w_user.statement_execution.execute_statement(
         warehouse_id=WAREHOUSE_ID,
