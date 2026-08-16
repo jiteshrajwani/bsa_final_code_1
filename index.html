@@ -224,7 +224,7 @@
       <div class="table-wrap">
         <table id="resultTable"></table>
       </div>
-      <a id="downloadBtn" class="download-btn" href="/api/download-transactions/${runId}">Download all transactions (Excel)</a>
+      <a id="downloadBtn" class="download-btn">Download all transactions (Excel)</a>
       <span class="reset-link" id="resetLink">Deposit another statement</span>
     </div>
 
@@ -322,6 +322,7 @@ async function pollStatus(runId) {
     const resultResp = await fetch(`/api/result/${runId}`);
     const result = await resultResp.json();
     setStamp('validated', 'done');
+    document.getElementById('downloadBtn').href = `/api/download-transactions/${runId}`;
     renderResult(result);
 
   } catch (err) {
