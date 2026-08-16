@@ -138,7 +138,7 @@ def get_result(request: Request, run_id: int):
     query = f"""
         SELECT *
         FROM {TABLE_NAME}
-        WHERE statement_hash = {run_data["statement_hash"]}')
+        WHERE statement_hash = '{run_data["statement_hash"]}'
     """
 
 
@@ -157,7 +157,7 @@ def get_result(request: Request, run_id: int):
     return {"columns": columns, "rows": rows}
 
 
-@app.get("/api/download-transactions")
+@app.get("/api/download-transactions/{run_id}")
 def download_transactions(request: Request,run_id:int):
     """
     Streams the entire bsa_classified_transactions table as an .xlsx file.
