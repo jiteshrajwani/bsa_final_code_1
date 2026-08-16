@@ -297,7 +297,7 @@ async function handleFile(file) {
   setStamp('processing', 'active');
   statusLine.textContent = 'Running pipeline...';
 
-  pollStatus(run_id);
+  pollStatus(run_id, statement_hash);
 }
 
 async function pollStatus(runId, statementHash) {
