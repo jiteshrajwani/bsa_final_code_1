@@ -1,13 +1,1 @@
-{
-  "detail": [
-    {
-      "type": "missing",
-      "loc": [
-        "query",
-        "run_id"
-      ],
-      "msg": "Field required",
-      "input": null
-    }
-  ]
-}
+https://bank-statement-analyzer-4577681236496031.11.azure.databricksapps.com/api/download-transactionsv
