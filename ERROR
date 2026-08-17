@@ -1,1 +1,23 @@
-https://bank-statement-analyzer-4577681236496031.11.azure.databricksapps.com/api/download-transactionsv
+
+  let uploadResp;
+  try {
+    uploadResp = await fetch('/api/upload', { method: 'POST', body: formData });
+  } catch (err) {
+    setStamp('received', 'error');
+    statusLine.textContent = 'Upload failed: ' + err.message;
+    return;
+  }
+
+  if (uploadResp.status === 422) {
+    const errBody = await uploadResp.json();
+    rejectNotABankStatement(errBody.detail);
+    return;
+  }
+
+  if (!uploadResp.ok) {
+    setStamp('received', 'error');
+    statusLine.textContent = 'Upload failed: ' + (await uploadResp.text());
+    return;
+  }
+
+  const { run_id, statement_hash } = await uploadResp.json();
