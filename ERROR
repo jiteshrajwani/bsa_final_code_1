@@ -1,23 +1,13 @@
+function setStamp(name, state) {
+  stamps[name].classList.remove('active', 'done', 'error');
+  if (state) stamps[name].classList.add(state);
+}
 
-  let uploadResp;
-  try {
-    uploadResp = await fetch('/api/upload', { method: 'POST', body: formData });
-  } catch (err) {
-    setStamp('received', 'error');
-    statusLine.textContent = 'Upload failed: ' + err.message;
-    return;
-  }
-
-  if (uploadResp.status === 422) {
-    const errBody = await uploadResp.json();
-    rejectNotABankStatement(errBody.detail);
-    return;
-  }
-
-  if (!uploadResp.ok) {
-    setStamp('received', 'error');
-    statusLine.textContent = 'Upload failed: ' + (await uploadResp.text());
-    return;
-  }
-
-  const { run_id, statement_hash } = await uploadResp.json();
+function rejectNotABankStatement(message) {
+  progressStage.classList.add('hidden');
+  resultStage.classList.add('hidden');
+  uploadStage.classList.remove('hidden');
+  filenameEl.classList.add('hidden');
+  rejectMessageEl.textContent = message;
+  rejectMessageEl.classList.remove('hidden');
+}
