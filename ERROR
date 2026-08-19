@@ -1,18 +1,9 @@
-def _infer_direction_from_narration(narration: str) ->str:
-    n = narration.upper().strip()
-    # "TO X" / "BY X" is a common PSU-bank narration convention (TO
-    # TRANSFER, TO TRF, TO CASH, TO SELF ... / BY TRANSFER, BY TRF, BY
-    # CASH, BY SELF ...). Checked first, since it's a positional signal
-    # anchored at the start of the narration, more reliable than a bare
-    # CR/DR substring search. This generalizes the original TO
-    # TRANSFER/BY TRANSFER special case to any "TO "/"BY " prefix, so a
-    # new bank's abbreviation doesn't need its own one-off patch.
-    if n.startswith("BY "):
-        return "CREDIT"
-    if n.startswith("TO "):
-        return "DEBIT"
-    if re.search(r"/CR[/\-]|\bCR\b|\brev(ersal)?\b", n, re.IGNORECASE):
-        return "CREDIT"
-    if re.search(r"/DR[/\-]|\bDR\b", n):
-        return "DEBIT"
-    return "UNKNOWN"
+TRANSACTION_TYPE_RULES = [
+    ('UPI',     r"\bupi[/\-]"),
+    ('NEFT',     r"\bneft[/\-]"),
+    ('RTGS',     r"\brtgs[/\-]"),
+    ('IMPS',     r"\bimps[/\-]"),
+    ('FUND_TRANSFER',     r"\btrf\b"),
+    ('ATM_WITHDRAWL',     r"\batm[\s/\-]?(wdl|withdrawl|cash|cwd|nwd)\b"),
+    ('POS_PURCHASE',     r"\b(pos|pur|purchase)[\s/\-]"),
+    ('CHEQUE',     r"\bch(q|eque)[\s/\-]|\bclg\b|\bbrn[\-/]clg\b"),
