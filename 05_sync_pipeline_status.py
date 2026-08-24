@@ -95,3 +95,5 @@ else:
         .execute()
     )
     print(f"Synced task/job-level status for run_id={RUN_ID}: {run_info.get('state', {}).get('result_state')}")
+
+display(spark.table(TBL_PIPELINE_LOG))
