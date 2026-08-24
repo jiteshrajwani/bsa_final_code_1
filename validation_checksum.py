@@ -171,3 +171,11 @@ log_pipeline_stage(spark, "validation", log_rows)
 invalidate_downstream("validation", validation_results.select("statement_hash"))
 
 print(f"Validated {row_count} statement(s) -> {TBL_SILVER_VALIDATED}")
+
+
+display(
+    spark.table(TBL_SILVER_VALIDATED)
+    .groupBy('validation_status')
+    .count()
+    .orderBy(col('count').desc())
+    )
