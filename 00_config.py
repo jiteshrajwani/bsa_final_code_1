@@ -59,6 +59,10 @@ TRANSACTION_TYPE_RULES = [
     ('NEFT',     r"\bneft[/\-]"),
     ('RTGS',     r"\brtgs[/\-]"),
     ('IMPS',     r"\bimps[/\-]"),
+    ('FUND_TRANSFER',     r"\btrf\b"),
+    ('ATM_WITHDRAWL',     r"\batm[\s/\-]?(wdl|withdrawl|cash|cwd|nwd)\b"),
+    ('POS_PURCHASE',     r"\b(pos|pur|purchase)[\s/\-]"),
+    ('CHEQUE',     r"\bch(q|eque)[\s/\-]|\bclg\b|\bbrn[\-/]clg\b"),
     ('ATM_WITHDRAWL',     r"\batm[\s/\-]?(wdl|withdrawl|cash|cwd|nwd)\b"),
     ('POS_PURCHASE',     r"\b(pos|pur|purchase)[\s/\-]"),
     ('CHEQUE',     r"\bch(q|eque)[\s/\-]|\bclg\b|\bbrn[\-/]clg\b"),
@@ -90,7 +94,7 @@ from pyspark.sql import Row
 # deletion, no separate backfill script to remember to run.
 STAGE_LOGIC_VERSIONS = {
     "pdf_extraction": 1,
-    "classification": 1,
+    "classification": 5,
     "validation": 1,
     "merge": 1,
 }
@@ -190,6 +194,8 @@ def log_pipeline_stage(spark_session, stage: str, results_df):
     attempt_col = _attempt_col(stage)
     version_col = _version_col(stage)
     current_version = STAGE_LOGIC_VERSIONS[stage]
+    
+    results_df = results_df.dropDuplicates(['statement_hash'])
 
     prior_attempts = (
         spark_session.table(TBL_PIPELINE_LOG)
@@ -269,7 +275,17 @@ def get_eligible_statements(stage: str, candidates_df, key_col: str = "statement
     eligible_mask = (
         F.col("_status").isNull()
         | ((F.col("_status") == "FAILED") & (F.col("_attempts") < F.lit(RETRY_CAP)))
-        | (F.col("_version") < F.lit(current_version))
+        # NULL logic_version means this row predates version tracking
+        # entirely (e.g. processed before this column existed, or before a
+        # later stage's tracking column was added). NULL < current_version
+        # evaluates to NULL in Spark, not True, and .filter() drops NULL
+        # rows same as False -- so without the coalesce, these statements
+        # would be silently frozen at whatever old logic produced them,
+        # forever, regardless of how many times STAGE_LOGIC_VERSIONS gets
+        # bumped. Coalescing to -1 guarantees they're always older than any
+        # real version (which starts at 1) and get one fresh pass under
+        # current code, then behave normally from then on.
+        | (F.coalesce(F.col("_version"), F.lit(-1)) < F.lit(current_version))
     )
 
     return joined.filter(eligible_mask).select(candidates_df["*"])
@@ -319,10 +335,16 @@ import json
 import hashlib
 from typing import Iterator
 import pandas as pd
-import pdfplumber
 from pyspark.sql.types import (
     StringType, StructField, StructType, IntegerType, DoubleType
 )
+# pdfplumber is deliberately NOT imported here at module level. Every
+# notebook in the pipeline runs %run ./00_config, so a module-level import
+# here would make pdfplumber a hard dependency for every stage, including
+# ones that never touch a PDF (classification, validation, merge, sync).
+# It's imported instead inside extract_pdfs() below, the only place it's
+# actually used -- so only pdf_extraction and bronze_backfill, the two
+# notebooks that call extract_pdfs, need it installed at all.
 
 
 def _identify_bank(text_lower: str) -> str:
@@ -331,6 +353,18 @@ def _identify_bank(text_lower: str) -> str:
             return bank
     return "UNKNOWN"
 
+
+def reset_statement_for_stages(stage: str, statement_hash: str):
+    status_col,_,error_col = _STAGE_COLUMNS[stage]
+    attempt_col = _attempt_col(stage)
+    version_col = _version_col(stage)
+    spark.sql(f"""
+              UPDATE {TBL_PIPELINE_LOG}
+              SET {status_col} = null,
+              {error_col} = null,
+              {attempt_col} = null,{version_col} = null
+              where statement_hash = '{statement_hash}'
+              """)
 
 def _compute_confidence(raw_text: str, num_pages: int, table_row_count: int) -> float:
     if not raw_text or num_pages == 0:
@@ -355,6 +389,7 @@ def _compute_confidence(raw_text: str, num_pages: int, table_row_count: int) -> 
 
 def extract_pdfs(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.DataFrame]:
     """mapInPandas worker: extract text+tables from each PDF's binary content"""
+    import pdfplumber  # imported here, not at module level -- see note above
     for batch in iterator:
         out_rows = []
         for _, row in batch.iterrows():
