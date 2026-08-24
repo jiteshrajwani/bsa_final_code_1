@@ -26,6 +26,7 @@ else:
     extracted_df = (
         raw_batch_df.select("path", "content")
         .mapInPandas(extract_pdfs, schema=EXTRACTION_SCHEMA)
+        .dropDuplicates(['statement_hash'])
         .withColumn("ingested_at", F.current_timestamp())
         .withColumn("pipeline_stages", F.lit("bronze_backfill"))
     )
