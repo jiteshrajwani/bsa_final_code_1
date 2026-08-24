@@ -26,11 +26,30 @@ def _classify_transaction_type(narration: str) -> tuple[str,float]:
     return "OTHER",0.3
 
 
+# def _infer_direction_from_narration(narration: str) ->str:
+#     n = narration.upper()
+#     if re.search(r"/CR[/\-]|\bCR\b|\brev(ersal)?\b",n,re.IGNORECASE) or n.startswith("BY TRANSFER") :
+#         return "CREDIT"
+#     if re.search(r"/DR[/\-]|\bDR\b",n) or n.startswith('TO TRANSFER'):
+#         return "DEBIT"
+#     return "UNKNOWN"
+
 def _infer_direction_from_narration(narration: str) ->str:
-    n = narration.upper()
-    if re.search(r"/CR[/\-]|\bCR\b|\brev(ersal)?\b",n,re.IGNORECASE) or n.startswith("BY TRANSFER"):
+    n = narration.upper().strip()
+    # "TO X" / "BY X" is a common PSU-bank narration convention (TO
+    # TRANSFER, TO TRF, TO CASH, TO SELF ... / BY TRANSFER, BY TRF, BY
+    # CASH, BY SELF ...). Checked first, since it's a positional signal
+    # anchored at the start of the narration, more reliable than a bare
+    # CR/DR substring search. This generalizes the original TO
+    # TRANSFER/BY TRANSFER special case to any "TO "/"BY " prefix, so a
+    # new bank's abbreviation doesn't need its own one-off patch.
+    if n.startswith("BY "):
         return "CREDIT"
-    if re.search(r"/DR[/\-]|\bDR\b",n) or n.startswith('TO TRANSFER'):
+    if n.startswith("TO "):
+        return "DEBIT"
+    if re.search(r"/CR[/\-]|\bCR\b|\brev(ersal)?\b", n, re.IGNORECASE):
+        return "CREDIT"
+    if re.search(r"/DR[/\-]|\bDR\b", n):
         return "DEBIT"
     return "UNKNOWN"
 
@@ -65,14 +84,29 @@ def _finalize_block(block_lines: List[str]) -> Dict:
             summary_idx, summary_date, summary_amounts = idx, dm, amts
             break
 
+    # if summary_idx is not None:
+    #     summary_line = block_lines[summary_idx]
+    #     remainder = summary_line[:summary_date.start()] + " " + summary_line[summary_date.end():]
+    #     for amt in summary_amounts:
+    #         remainder = remainder.replace(amt, " ")
+    #     inline_narration = re.sub(r"\s+"," ",remainder).strip(" -/:")
+    #     other_lines = [l for i, l in enumerate(block_lines) if i != summary_idx]
+    #     narration = re.sub(r"\s+", " ", " ".join([*other_lines, inline_narration])).strip()
+
     if summary_idx is not None:
         summary_line = block_lines[summary_idx]
-        remainder = summary_line[:summary_date.start()] + " " + summary_line[summary_date.end():]
+        # strip EVERY date occurence on the top line, not just the first match
+        # -- some bank repeats value date/post date on the post line and, a
+        # leftover second date otherwise pulls out the narration
+        remainder = _DATE_RE.sub(" ",summary_line)
         for amt in summary_amounts:
-            remainder = remainder.replace(amt, " ")
-        inline_narration = re.sub(r"\s+", " ", remainder).strip(" -/:")
+            remainder = re.sub(re.escape(amt) + r"\s*(cr|dr)?\b"," ",remainder,flags=re.IGNORECASE  )
+        inline_narration = re.sub(r"\s+"," ",remainder).strip(" -/:")
         other_lines = [l for i, l in enumerate(block_lines) if i != summary_idx]
-        narration = re.sub(r"\s+", " ", " ".join([*other_lines, inline_narration])).strip()
+        narration = re.sub(r"\s+", " ", " ".join([inline_narration,*other_lines])).strip()
+
+
+
     else:
         # Fallback: date sits on its own line, separate from the amounts --
         # e.g. a short cash-deposit entry where the date heads the block and
@@ -496,3 +530,11 @@ log_pipeline_stage(spark, "classification", log_rows)
 invalidate_downstream("classification", touched_hashes)
 
 print(f"Classified {row_count} transaction line(s) from {bronze_cpu_eligible.count()} statement(s) -> {TBL_SILVER_TRANSACTIONS}")
+
+
+display(
+    spark.table(TBL_SILVER_TRANSACTIONS)
+    .groupBy('txn_type')
+    .count()
+    .orderBy(col('count').desc())
+)
