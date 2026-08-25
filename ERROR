@@ -1,9 +1,33 @@
-TRANSACTION_TYPE_RULES = [
-    ('UPI',     r"\bupi[/\-]"),
-    ('NEFT',     r"\bneft[/\-]"),
-    ('RTGS',     r"\brtgs[/\-]"),
-    ('IMPS',     r"\bimps[/\-]"),
-    ('FUND_TRANSFER',     r"\btrf\b"),
-    ('ATM_WITHDRAWL',     r"\batm[\s/\-]?(wdl|withdrawl|cash|cwd|nwd)\b"),
-    ('POS_PURCHASE',     r"\b(pos|pur|purchase)[\s/\-]"),
-    ('CHEQUE',     r"\bch(q|eque)[\s/\-]|\bclg\b|\bbrn[\-/]clg\b"),
+from datetime import datetime
+
+_DATE_FORMATS = [
+    "%d/%m/%y", "%d/%m/%Y", "%d-%m-%y", "%d-%m-%Y", "%d.%m.%y", "%d.%m.%Y",
+    "%d/%b/%Y", "%d-%b-%Y", "%d %b %Y", "%d/%b/%y", "%d-%b-%y",
+    "%Y-%m-%d", "%Y/%m/%d",
+]
+
+def _parse_date_loose(date_str):
+    if not date_str:
+        return None
+    s = str(date_str).strip()
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+rows = (
+    spark.table(TBL_SILVER_TRANSACTIONS)
+    .filter(col("statement_hash") == "17b443d51ba8e8e7efcbed88f3ef41268160ecd0d0cdab11bc92d0365b81b38a")
+    .orderBy("line_no")
+    .select("line_no", "txn_date_raw", "debit_amount", "credit_amount", "running_balance")
+    .collect()
+)
+
+first_row, last_row = rows[0], rows[-1]
+first_date, last_date = _parse_date_loose(first_row["txn_date_raw"]), _parse_date_loose(last_row["txn_date_raw"])
+
+print("first_row:", first_row, "-> parsed:", first_date)
+print("last_row:", last_row, "-> parsed:", last_date)
+print("would swap:", bool(first_date and last_date and last_date < first_date))
