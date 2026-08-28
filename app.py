@@ -16,6 +16,7 @@ Flow:
   5. User can also download the full bsa_classified_transactions table
      as an Excel file at any time -> as the user
 """
+import pdfplumber
 import hashlib
 import os
 import uuid
@@ -44,6 +45,19 @@ TABLE_NAME = os.environ.get("BSA_TABLE_NAME", "edp_bfil_prod.analytics_team.bsa_
 TRANSACTIONS_TABLE = os.environ.get("BSA_TRANSACTIONS_TABLE", "edp_bfil_prod.analytics_team.bsa_classified_transactions")
 WAREHOUSE_ID = os.environ.get("BSA_WAREHOUSE_ID", "7ce0374386ff9e43")
 # ---------------------------------------------------------------------------
+
+BANK_STATEMENT_KEYWORDS = [
+    'account_number','account_no','a/c no','a/c number',
+    'ifsc','ifsc code','micr','micr code',
+    'statement of account','account statement','bank statement',
+    'opening balance','closing balance','balance b/f','balance c/f','balance',
+    'withdrawl','deposit','debit','credit',
+    'transaction_date','value_date','narration','particulars',
+    'customer id','cif no','cif number','crn',
+    'savings account','current account','cheque','chq no',
+    'neft','rtgs','imps','upi'
+]
+BANK_STATEMENT_MIN_MATCHES = 2
 
 DATABRICKS_HOST = os.environ.get("DATABRICKS_HOST")
 
@@ -74,6 +88,20 @@ def get_user_client(request: Request) -> WorkspaceClient:
     return WorkspaceClient(host=DATABRICKS_HOST, token=user_token, auth_type="pat")
 
 
+def _looks_like_bank_statement(contents: bytes) -> bool:
+    """Cheap first page only check, meant to instantly reject wrong 
+    uploads before they even touch the volumne or trigger a job"""
+
+    try:
+        with pdfplumber.open(BytesIO(contents)) as pdf:
+            pages = pdf.pages[:2]
+            text = "\n".join((p.extract_text() or "") for p in pages).lower()
+    except Exception:
+        return False # unreadable/corrupted/password-protected pdf
+    
+    matches = sum(1 for kw in BANK_STATEMENT_KEYWORDS if kw.lower() in text)
+    return matches>=BANK_STATEMENT_MIN_MATCHES
+
 @app.post("/api/upload")
 async def upload_pdf(request: Request, file: UploadFile = File(...)):
     if not file.filename.lower().endswith(".pdf"):
@@ -85,6 +113,11 @@ async def upload_pdf(request: Request, file: UploadFile = File(...)):
     dest_path = f"{VOLUME_PATH}/{unique_name}"
 
     contents = await file.read()
+    if not _looks_like_bank_statement(contents):
+        raise HTTPException(
+            422,
+            "This doenst look like a bank statement. Please upload a valid bank statement PDF")
+    
     statement_hash = hashlib.sha256(contents).hexdigest() # same hash the pipeline computes
     w_user.files.upload(dest_path, SizedBytesIO(contents), overwrite=True)
 
