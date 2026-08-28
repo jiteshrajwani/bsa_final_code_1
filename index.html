@@ -92,6 +92,14 @@
     margin-top:14px;
     text-align:center;
   }
+  .reject-message{
+    font-family:'IBM Plex Sans', sans-serif;
+    font-size:13px;
+    color:var(--stamp);
+    margin-top:14px;
+    text-align:center;
+  
+  }
 
   /* progress / stamps */
   .stamps{
@@ -208,6 +216,7 @@
       </div>
       <input type="file" id="fileInput" accept="application/pdf">
       <div class="filename hidden" id="filename"></div>
+      <div class="reject-message hidden" id="rejectMessage"></div>
     </div>
 
     <div id="progressStage" class="hidden">
@@ -235,6 +244,7 @@
 const dropzone = document.getElementById('dropzone');
 const fileInput = document.getElementById('fileInput');
 const filenameEl = document.getElementById('filename');
+const rejectMessageEl = document.getElementById('rejectMessage');
 const uploadStage = document.getElementById('uploadStage');
 const progressStage = document.getElementById('progressStage');
 const resultStage = document.getElementById('resultStage');
@@ -265,11 +275,21 @@ function setStamp(name, state) {
   if (state) stamps[name].classList.add(state);
 }
 
+function rejectNotABankStatement(message) {
+  progressStage.classList.add('hidden');
+  resultStage.classList.add('hidden');
+  uploadStage.classList.remove('hidden');
+  filenameEl.classList.add('hidden');
+  rejectMessageEl.textContent = message;
+  rejectMessageEl.classList.remove('hidden');
+}
+
 async function handleFile(file) {
   if (file.type !== 'application/pdf') {
     alert('Please choose a PDF file.');
     return;
   }
+  rejectMessageEl.classList.add('hidden');
   filenameEl.textContent = file.name;
   filenameEl.classList.remove('hidden');
 
@@ -284,12 +304,23 @@ async function handleFile(file) {
   let uploadResp;
   try {
     uploadResp = await fetch('/api/upload', { method: 'POST', body: formData });
-    if (!uploadResp.ok) throw new Error(await uploadResp.text());
   } catch (err) {
     setStamp('received', 'error');
     statusLine.textContent = 'Upload failed: ' + err.message;
     return;
   }
+
+  if (uploadResp.status === 422) {
+    const errBody = await uploadResp.json();
+    rejectNotABankStatement(errBody.detail);
+    return;
+  }
+
+  if (!uploadResp.ok) {
+    setStamp('received', 'error');
+    statusLine.textContent = 'Upload failed: ' + (await uploadResp.text());
+    return;
+  }  
 
   const { run_id, statement_hash } = await uploadResp.json();
 
