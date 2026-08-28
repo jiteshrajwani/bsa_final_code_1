@@ -1,0 +1,142 @@
+!pip install -q python-magic
+
+import os
+from pathlib import Path
+import magic
+ 
+
+class PDFValidator:
+    MAX_FILENAME_LENGTH = 255
+
+    def __init__(
+        self,
+        file_path,
+        max_file_size=20 * 1024 * 1024,  # 20 MB
+        min_file_size=100,               # 100 bytes
+    ):
+        self.file_path = Path(file_path)
+        self.max_file_size = max_file_size
+        self.min_file_size = min_file_size
+
+    def validate(self):
+        """
+        Run all validation checks.
+        Raises ValueError if any validation fails.
+        """
+        self._validate_filename()
+        self._sanitize_filename()
+        self._check_extension()
+        self._check_file_exists()
+        self._check_file_size()
+        self._check_mime_type()
+        self._check_magic_bytes()
+        self._check_eof_marker()
+
+        return True
+
+    # -------------------------------------------------------
+    # Filename validation
+    # -------------------------------------------------------
+
+    def _validate_filename(self):
+        filename = self.file_path.name
+
+        if not filename:
+            raise ValueError("Filename is missing.")
+
+        if len(filename) > self.MAX_FILENAME_LENGTH:
+            raise ValueError(
+                f"Filename exceeds {self.MAX_FILENAME_LENGTH} characters."
+            )
+
+    def _sanitize_filename(self):
+        filename = self.file_path.name
+
+        if "\x00" in filename:
+            raise ValueError("Filename contains null byte.")
+
+        if ".." in filename:
+            raise ValueError("Filename contains path traversal sequence.")
+
+    # -------------------------------------------------------
+    # File checks
+    # -------------------------------------------------------
+
+    def _check_file_exists(self):
+        if not self.file_path.exists():
+            raise ValueError("File does not exist.")
+
+        if not self.file_path.is_file():
+            raise ValueError("Path is not a file.")
+
+    def _check_extension(self):
+        if self.file_path.suffix.lower() != ".pdf":
+            raise ValueError("Invalid file extension. Expected .pdf")
+
+    def _check_file_size(self):
+        size = self.file_path.stat().st_size
+
+        if size < self.min_file_size:
+            raise ValueError(
+                f"File size below minimum threshold ({self.min_file_size} bytes)."
+            )
+
+        if size > self.max_file_size:
+            raise ValueError(
+                f"File size exceeds maximum limit ({self.max_file_size} bytes)."
+            )
+
+    # -------------------------------------------------------
+    # Content validation
+    # -------------------------------------------------------
+
+    def _check_mime_type(self):
+        mime = magic.Magic(mime=True)
+        detected_type = mime.from_file(str(self.file_path))
+
+        if detected_type != "application/pdf":
+            raise ValueError(
+                f"Invalid MIME type. Expected application/pdf, got {detected_type}"
+            )
+
+    def _check_magic_bytes(self):
+        with open(self.file_path, "rb") as file:
+            header = file.read(5)
+
+        if header != b"%PDF-":
+            raise ValueError(
+                "Invalid PDF magic bytes. Missing '%PDF-' header."
+            )
+
+    def _check_eof_marker(self):
+        with open(self.file_path, "rb") as file:
+            file.seek(0, os.SEEK_END)
+
+            # Read last 2KB where EOF marker normally resides
+            size = file.tell()
+            read_size = min(size, 2048)
+
+            file.seek(-read_size, os.SEEK_END)
+            tail = file.read()
+
+        if b"%%EOF" not in tail:
+            raise ValueError(
+                "PDF EOF marker (%%EOF) not found. File may be truncated."
+            )
+
+
+# ------------------------------------------------------------------
+# Example usage
+# ------------------------------------------------------------------
+
+try:
+    validator = PDFValidator(
+        file_path="/Workspace/Users/jitesh.rajwani@indusind.com/bsa_app/Checks/ac2.pdf",
+    )
+
+    validator.validate()
+
+    print("✅ PDF validation successful")
+
+except ValueError as e:
+    print(f"❌ Validation failed: {e}")
