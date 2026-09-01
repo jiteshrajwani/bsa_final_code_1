@@ -1,320 +1,198 @@
-%macro cumm1_staff(data=,var=,final_data=,m=);
-proc sort data=&data;
-by staffid month;
-run;
-proc sql;
-	create table staff1_l as 
-	select max(B.&var.) as MAX_&m.M_&var.,min(b.&var.) as Min_&m.M_&var.,
-	mean(b.&var.) As Avg_&m.M_&var.,
-    exp(mean(log(max(b.&var.,1)))) as geo_mean_&m.M_&var.,
-    A.staffid, A.month,A.branch_id
-	from 
-&data as A
-	left join 
-&data as B
-	on A.staffid = B.staffid 
-	where A.month > B.month and INTCK('month',A.month,B.month) <&m
-	group by A.staffid, A.month,A.branch_id;
-quit;
-Proc sql;
-create table branch as
-select branch_id,month,sum(&var) as &var
-from &data
-group by 1,2;
-quit;
-proc sql;
-	create table br_1 as 
-	select max(B.&var.) as MAX_&m.M_&var._bma,min(b.&var.) as Min_&m.M_&var._bma,
-	mean(b.&var.) As Avg_&m.M_&var._bma,A.branch_id, A.month
-	from 
-	branch as A
-	left join 
-	branch as B
-	on A.branch_id = B.branch_id 
-	where A.month> B.month and INTCK('month',A.month,B.month) <&m
-	group by A.branch_id, A.month;
-quit;
+%macro fresh_frwd_flow(m1=,m2=);
 
 proc sql;
-	create table br_2 as 
-	select max(A.&var.) as MAX_&m.M_&var._bc,
-	min(A.&var.) as Min_&m.M_&var._bc,
- 
-	mean(A.&var.) As Avg_&m.M_&var._bc,A.branch_id, A.month
-	from 
-&data as A
-	group by A.branch_id, A.month;
+
+    create table clientwise as
+        select 
+            b.ZoneName,
+            b.StateName,
+            b.Region,
+            b.Area,
+            b.BranchID,
+            b.BranchName,
+            b.clientid,
+            b.clientcode,
+			b.clientloanid,
+            b.Clientname,
+            b.centerstaffid,
+            b.Ageing as Ageing_PM,
+            a.Ageing as Ageing_CM,
+            a.Client_DPD as NoOfDaysInArrears_CM,
+            coalesce(b.Client_DPD, 0) as NoOfDaysInArrears_PM,
+            a.POS as POS_CM,
+            b.POS as POS_PM
+        from PTSD.P_loanfacts_&m1 b
+        left join PTSD.P_loanfacts_&m2 a 
+            on a.CLIENTID = b.CLIENTID
+        where b.Branch_Type = 'SMPT' and b.Type_New ='Advances';
 quit;
 
-data br_map;
-merge br_1 br_2;
-by branch_id month;
-run;
-data staff_map;
-merge staff1_l &data;
-by staffid month;
-run;
-Proc sort data=staff_map;
-by branch_id month;
-run;
-data fin_cumm_&var;
-merge staff_map br_map;
-by branch_id month;
-run;
-proc sort data=fin_cumm_&var;
-     by branch_id month ;
-run;
-proc rank data= fin_cumm_&var out= ranked_st descending ties=dense;
-     by branch_id month ;
-     var &var.;
-     ranks rank_&m.M_&var.;
-run;
 
- 
-Proc sql;
-create table rank_max as
-select branch_id,month,
-max(rank_&m.M_&var.) as max_rank_&m.M_&var.
-/*max_rank_&m.M_&var*/
-/*min(rank_&m.M_&var.) as min_rank_&m.M_&var.*/
-from ranked_st
-group by 1,2;
+
+proc sql;
+create table clientwise_&m2 as 
+select zonename as zone, statename as state, region, branchid, 
+centerstaffid as staff_id,intnx('month',input("&m2",monyy.),0,'B') format = date9. format = date9. as month,
+count(distinct CLIENTID) as tot_client,
+count(distinct case when ageing_pm eq 'Current1' and 
+ageing_cm in ('[1 To 30]','[31 To 60]','[61 To 90]','[>90]') then CLIENTID end) as fresh_flow, 
+count(distinct case
+  when (ageing_pm = '[1 To 30]' and ageing_cm in ('[31 To 60]','[61 To 90]','[>90]'))
+    or (ageing_pm = '[31 To 60]' and ageing_cm in ('[61 To 90]','[>90]'))
+    or (ageing_pm = '[61 To 90]' and ageing_cm in ('[>90]'))
+  then CLIENTID
+end) as frwd_flow,
+count(distinct case when ageing_pm ne '[>90]' and ageing_cm eq '[>90]' then CLIENTID end) as npa_flow
+
+from clientwise
+group by 1,2,3,4,5,6;
 quit;
-data &final_data.;
-retain staffid branch_id month;
-merge fin_cumm_&var ranked_st rank_max ;
-staffid=compress(staffid);
-by branch_id month;
-if branch_id ne "";
-v1_&m.M_&var.=&var./MAX_&m.M_&var._bc;
- 
-if MIN_&m.M_&var._bc >0 then do;
-v2_&m.M_&var.=&var./MIN_&m.M_&var._bc;
-end;
-else v2_&m.M_&var.= -99;
-v3_&m.M_&var.=&var./AVG_&m.M_&var._bc;
-v4_&m.M_&var.=&var./MAX_&m.M_&var._bma;
- 
-if MIN_&m.M_&var._bma>0 then do;
-v5_&m.M_&var.=&var./MIN_&m.M_&var._bma;
-end;
-else v5_&m.M_&var.=-99;
-v6_&m.M_&var.=&var./AVG_&m.M_&var._bma;
-if Min_&m.M_&var.>0 then do;
-v7_&m.M_&var.=&var./Min_&m.M_&var.;
-end;
-else v7_&m.M_&var. = -99; 
-v8_&m.M_&var.=&var./Max_&m.M_&var.;
-v9_&m.M_&var.=&var./Avg_&m.M_&var.;
-v10_&m.M_&var.=&var./geo_mean_&m.M_&var.;
-v11_&m.M_&var.=&var./max_rank_&m.M_&var.;
-v12_&m.M_&var.=AVG_&m.M_&var./MAX_&m.M_&var._bc;
-v13_&m.M_&var.=MAX_&m.M_&var./MAX_&m.M_&var._bc;
-if MIN_&m.M_&var._bc>0 then do;
-v14_&m.M_&var.=MIN_&m.M_&var./MIN_&m.M_&var._bc;
-end;
-else v14_&m.M_&var. = -99;
-/*v15_&var.=MAX_&var._bc/MIN_&var._bc;*/
-if &var.>MIN_&m.M_&var._bc then do;
-v15_&m.M_&var.=(MAX_&m.M_&var._bc-&var.)/(&var.-MIN_&m.M_&var._bc);
-end;
-else v15_&m.M_&var.=-99;
-/*v17_&var.=MAX_&var._bc/MAX_&var._bma;*/
-run;
-proc sort data=&final_data. nodupkey;
-by staffid month;
-run;
+
 %mend;
 
-
-    # Databricks notebook source
-# MAGIC %md
-# MAGIC # Cumulative Staff/Branch Ratio Features — PySpark (Databricks Serverless)
-# MAGIC
-# MAGIC Port of `%cumm1_staff(data=, var=, final_data=, m=)`. This returns a function rather than a
-# MAGIC fixed output table, since the original only ever produced a transient WORK-library dataset —
-# MAGIC call it and `.saveAsTable(...)` the result wherever you actually need it persisted.
-# MAGIC
-# MAGIC ## Read this before trusting the numbers
-# MAGIC
-# MAGIC 1. **Likely bug in the trailing-window filter — fixed here, flagged loudly.** Both self-joins in
-# MAGIC    the original used:
-# MAGIC    `where A.month > B.month and INTCK('month', A.month, B.month) < &m`
-# MAGIC    `INTCK('month', start, end)` is negative whenever `end` is before `start`. Here `A.month`
-# MAGIC    (the *later* month) is passed as `start` and `B.month` (the *earlier* month) as `end`, so the
-# MAGIC    result is always ≤ -1 whenever `A.month > B.month` — which is always `< &m` for any normal
-# MAGIC    positive `m` (3, 6, 12...). The filter never actually excludes anything: every call computes
-# MAGIC    over **full history**, not a trailing `m`-month window, no matter what `m` is. The column
-# MAGIC    names (`MAX_3M_var`, `v9_6M_var`, ...) say "M months," but the number underneath was
-# MAGIC    full-history all along.
-# MAGIC    Below, `m` bounds what the column names say it bounds — trailing `m` calendar months, current
-# MAGIC    month excluded — using an integer month index (`year*12 + month`) and `rangeBetween(-m, -1)`.
-# MAGIC    If you need bit-for-bit parity with the original's actual (unbounded) behavior instead — e.g.
-# MAGIC    a model was already trained on it — call with `full_history=True` and the window bound is
-# MAGIC    dropped entirely.
-# MAGIC 2. **Both self-joins replaced with window functions.** A self-join per staff/branch per month
-# MAGIC    scales badly; `rangeBetween` over a partitioned, ordered window gets the same trailing-window
-# MAGIC    aggregates in one sorted pass. `rangeBetween` (not `rowsBetween`) is deliberate — it respects
-# MAGIC    actual calendar gaps if a staff member has a missing month, where a row-count window would not.
-# MAGIC 3. **`PROC RANK` + re-merge collapsed into one more window function** (`dense_rank()`), since
-# MAGIC    ranking a column and pulling each group's max rank doesn't need its own table round-trip here.
-# MAGIC 4. **`max(var, 1)` inside the geo-mean, before `log()`, floors missing values at 1 — to match SAS.**
-# MAGIC    SAS treats a missing numeric value as smaller than any real number, so `max(., 1)` evaluates
-# MAGIC    to `1`. Spark's `greatest()` returns `NULL` if either input is `NULL`, so a plain
-# MAGIC    `F.greatest(col, F.lit(1))` would silently drop those rows from the geo-mean instead of
-# MAGIC    flooring them — handled explicitly below.
-# MAGIC 5. **`SAS COMPRESS()` on `staffid`** replicated with the same blank-stripping helper as the
-# MAGIC    earlier script.
-# MAGIC
-# MAGIC Expected input schema for `data`: one row per `staffid` + `month` (DateType, first-of-month) +
-# MAGIC `branch_id` + the numeric column named by `var`. Rename columns before calling if your source
-# MAGIC uses different names (e.g. `empid`/`branchid` in `emp_fin_dtls`) — see the example at the bottom.
-
-# COMMAND ----------
-
-from pyspark.sql import DataFrame, functions as F
-from pyspark.sql.window import Window
+%fresh_frwd_flow(m1=oct25,m2=nov25);
 
 
-def compress_(col):
-    """SAS COMPRESS(): strips ALL blanks (not just leading/trailing)."""
-    return F.regexp_replace(col.cast("string"), " ", "")
+def build_flow_metrics(m1_dt: date, m2_dt: date) -> DataFrame:
+    m1_suffix = month_suffix(m1_dt)
+    m2_suffix = month_suffix(m2_dt)
 
+    m1_table, m1_use_etl = _resolve_flow_source(m1_suffix)
+    m2_table, m2_use_etl = _resolve_flow_source(m2_suffix)
 
-def cumm_staff_features(data: DataFrame, var: str, m: int, full_history: bool = False) -> DataFrame:
-    """
-    PySpark port of %cumm1_staff(data=, var=, final_data=, m=).
+    # SAS:
+    # b = m1 = previous month
+    # a = m2 = current month
+    #
+    # The Branch_Type and Type_New filters are applied only to b.
 
-    Parameters
-    ----------
-    data : DataFrame with columns staffid, month (date, first-of-month), branch_id, <var>
-    var  : name of the numeric column to build trailing/ratio features for
-    m    : trailing window length in months (see note above on what this bounds)
-    full_history : if True, reproduces the original SAS's actual (unbounded) behavior instead of a
-                   true trailing m-month window
-
-    Returns a DataFrame keyed by (staffid, month) with the same v1..v15 ratio columns as the SAS macro.
-    """
-    suf = f"{m}M_{var}"
-    df = data.withColumn("month_idx", F.year("month") * 12 + F.month("month"))
-
-    if full_history:
-        staff_window = Window.partitionBy("staffid").orderBy("month_idx").rangeBetween(
-            Window.unboundedPreceding, -1
-        )
-        branch_window = Window.partitionBy("branch_id").orderBy("month_idx").rangeBetween(
-            Window.unboundedPreceding, -1
-        )
-    else:
-        staff_window = Window.partitionBy("staffid").orderBy("month_idx").rangeBetween(-m, -1)
-        branch_window = Window.partitionBy("branch_id").orderBy("month_idx").rangeBetween(-m, -1)
-
-    # SAS's max(var, 1) treats a missing var as smaller than 1, so it floors to 1; Spark's greatest()
-    # would instead propagate NULL. This replicates the SAS floor explicitly.
-    var_floor1 = F.when(F.col(var).isNull(), F.lit(1)).otherwise(F.greatest(F.col(var), F.lit(1)))
-
-    # ---- staff-level trailing stats (was staff1_l, built via self-join) ----
-    staff_stats = (
-        df.withColumn(f"MAX_{suf}", F.max(var).over(staff_window))
-        .withColumn(f"Min_{suf}", F.min(var).over(staff_window))
-        .withColumn(f"Avg_{suf}", F.avg(var).over(staff_window))
-        .withColumn(f"geo_mean_{suf}", F.exp(F.avg(F.log(var_floor1)).over(staff_window)))
+    b_filter = (
+        (F.col("Branch_Type") == "SMPT")
+        & (F.col("Type_New") == "Advances")
+    )
+    a_filter = (
+        (F.col("Branch_Type") == "SMPT")
+        & (F.col("Type_New") == "Advances")
     )
 
-    # ---- branch-month totals, then trailing branch stats (was br_1, self-join on `branch`) ----
-    branch_totals = df.groupBy("branch_id", "month", "month_idx").agg(F.sum(var).alias(var))
-    branch_bma = branch_totals.select(
-        "branch_id",
-        "month",
-        F.max(var).over(branch_window).alias(f"MAX_{suf}_bma"),
-        F.min(var).over(branch_window).alias(f"Min_{suf}_bma"),
-        F.avg(var).over(branch_window).alias(f"Avg_{suf}_bma"),
+    if m1_use_etl:
+        b_filter = b_filter & (F.col("ETL_IS_ACTIVE") == "1")
+
+    b = (
+        spark.table(m1_table)
+        .filter(b_filter)
+        .select(
+            "ZoneName",
+            "StateName",
+            "Region",
+            "BranchID",
+            "centerstaffid",
+            "CLIENTID",
+            "Ageing",
+        )
     )
 
-    # ---- branch cross-sectional stats, current month across staff (was br_2) ----
-    branch_bc = df.groupBy("branch_id", "month").agg(
-        F.max(var).alias(f"MAX_{suf}_bc"),
-        F.min(var).alias(f"Min_{suf}_bc"),
-        F.avg(var).alias(f"Avg_{suf}_bc"),
+    a = spark.table(m2_table)
+
+    if m2_use_etl:
+        a = a_filter & (F.col("ETL_IS_ACTIVE") == "1")
+
+    a = (
+        spark.table(m2_table)
+        .filter(a_filter)
+        .select(
+        "CLIENTID",
+        "Ageing",
+        )
+    )
+    clientwise = (
+        b.alias("b")
+        .join(
+            a.alias("a"),
+            F.col("a.CLIENTID") == F.col("b.CLIENTID"),
+            "left",
+        )
+        .select(
+            F.col("b.ZoneName").alias("zone"),
+            F.col("b.StateName").alias("state"),
+            F.col("b.Region").alias("region"),
+            F.col("b.BranchID").alias("branchid"),
+            F.col("b.centerstaffid").alias("staff_id"),
+            F.col("b.CLIENTID").alias("clientid"),
+            F.col("b.Ageing").alias("ageing_pm"),
+            F.col("a.Ageing").alias("ageing_cm"),
+        )
     )
 
-    # ---- assemble (was the staff_map / br_map / fin_cumm_&var merges) ----
-    combined = staff_stats.join(branch_bma, on=["branch_id", "month"], how="left").join(
-        branch_bc, on=["branch_id", "month"], how="left"
+    fresh_flow_cond = (
+        (F.col("ageing_pm") == "Current1")
+        & F.col("ageing_cm").isin(
+            "[1 To 30]",
+            "[31 To 60]",
+            "[61 To 90]",
+            "[>90]",
+        )
     )
 
-    # ---- rank within branch/month, descending, dense (was PROC RANK + rank_max re-merge) ----
-    rank_window = Window.partitionBy("branch_id", "month").orderBy(F.col(var).desc())
-    group_window = Window.partitionBy("branch_id", "month")
-
-    combined = combined.withColumn(f"rank_{suf}", F.dense_rank().over(rank_window))
-    combined = combined.withColumn(f"max_rank_{suf}", F.max(F.col(f"rank_{suf}")).over(group_window))
-
-    # ---- final ratio features (was the last data step) ----
-    v = F.col(var)
-    result = (
-        combined.withColumn("staffid", compress_(F.col("staffid")))
-        .filter(F.col("branch_id").isNotNull() & (F.col("branch_id").cast("string") != ""))
-        .withColumn(f"v1_{suf}", v / F.col(f"MAX_{suf}_bc"))
-        .withColumn(
-            f"v2_{suf}",
-            F.when(F.col(f"Min_{suf}_bc") > 0, v / F.col(f"Min_{suf}_bc")).otherwise(F.lit(-99)),
+    frwd_flow_cond = (
+        (
+            (F.col("ageing_pm") == "[1 To 30]")
+            & F.col("ageing_cm").isin(
+                "[31 To 60]",
+                "[61 To 90]",
+                "[>90]",
+            )
         )
-        .withColumn(f"v3_{suf}", v / F.col(f"Avg_{suf}_bc"))
-        .withColumn(f"v4_{suf}", v / F.col(f"MAX_{suf}_bma"))
-        .withColumn(
-            f"v5_{suf}",
-            F.when(F.col(f"Min_{suf}_bma") > 0, v / F.col(f"Min_{suf}_bma")).otherwise(F.lit(-99)),
+        | (
+            (F.col("ageing_pm") == "[31 To 60]")
+            & F.col("ageing_cm").isin(
+                "[61 To 90]",
+                "[>90]",
+            )
         )
-        .withColumn(f"v6_{suf}", v / F.col(f"Avg_{suf}_bma"))
-        .withColumn(
-            f"v7_{suf}",
-            F.when(F.col(f"Min_{suf}") > 0, v / F.col(f"Min_{suf}")).otherwise(F.lit(-99)),
+        | (
+            (F.col("ageing_pm") == "[61 To 90]")
+            & (F.col("ageing_cm") == "[>90]")
         )
-        .withColumn(f"v8_{suf}", v / F.col(f"MAX_{suf}"))
-        .withColumn(f"v9_{suf}", v / F.col(f"Avg_{suf}"))
-        .withColumn(f"v10_{suf}", v / F.col(f"geo_mean_{suf}"))
-        .withColumn(f"v11_{suf}", v / F.col(f"max_rank_{suf}"))
-        .withColumn(f"v12_{suf}", F.col(f"Avg_{suf}") / F.col(f"MAX_{suf}_bc"))
-        .withColumn(f"v13_{suf}", F.col(f"MAX_{suf}") / F.col(f"MAX_{suf}_bc"))
-        .withColumn(
-            f"v14_{suf}",
-            F.when(
-                F.col(f"Min_{suf}_bc") > 0, F.col(f"Min_{suf}") / F.col(f"Min_{suf}_bc")
-            ).otherwise(F.lit(-99)),
-        )
-        .withColumn(
-            f"v15_{suf}",
-            F.when(
-                v > F.col(f"Min_{suf}_bc"),
-                (F.col(f"MAX_{suf}_bc") - v) / (v - F.col(f"Min_{suf}_bc")),
-            ).otherwise(F.lit(-99)),
-        )
-        .drop("month_idx")
-        .dropDuplicates(["staffid", "month"])
-        # nodupkey guard from the original — should be a no-op if staffid/month is already unique,
-        # which it will be by construction unless the source `data` itself has duplicate rows on that key
     )
 
-    return result
+    npa_flow_cond = (
+        (F.col("ageing_pm") != "[>90]")
+        & (F.col("ageing_cm") == "[>90]")
+    )
 
+    m_1_30_cond = (
+        (F.col("ageing_pm") == "Current1")
+        & (F.col("ageing_cm") == "[1 To 30]")
+    )
 
-# COMMAND ----------
-# MAGIC %md
-# MAGIC ## Example usage
-# MAGIC Uncomment and adapt — no macro call with real `var=`/`m=` values was in the SAS you shared, so
-# MAGIC this is illustrative, wired to the `emp_fin_dtls` table from the earlier conversion.
+    return (
+        clientwise
+        .groupBy(
+            "zone",
+            "state",
+            "region",
+            "branchid",
+            "staff_id",
+        )
+        .agg(
+            F.countDistinct("clientid").alias("tot_client"),
 
-# COMMAND ----------
+            F.countDistinct(
+                F.when(fresh_flow_cond, F.col("clientid"))
+            ).alias("fresh_flow"),
 
-# emp_fin_dtls_renamed = (
-#     spark.table("edp_bfil_prod.analytics_team.emp_fin_dtls")
-#     .withColumnRenamed("empid", "staffid")
-#     .withColumnRenamed("branchid", "branch_id")
-# )
-#
-# features_3m = cumm_staff_features(emp_fin_dtls_renamed, var="DAMS_Total_cnt", m=3)
-# features_3m.write.mode("overwrite").saveAsTable(
-#     "edp_bfil_prod.analytics_team.dams_total_cnt_features_3m"
-# )
+            F.countDistinct(
+                F.when(frwd_flow_cond, F.col("clientid"))
+            ).alias("frwd_flow"),
 
+            F.countDistinct(
+                F.when(npa_flow_cond, F.col("clientid"))
+            ).alias("npa_flow"),
+
+            F.countDistinct(
+                F.when(m_1_30_cond, F.col("clientid"))
+            ).alias("m_1_30"),
+        )
+        .withColumn("month", F.lit(month_begin(m2_dt)))
+    )
