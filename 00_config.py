@@ -9,6 +9,14 @@ dbutils.widgets.text('job_start_time_ms',"","Job Run Start Time in ms since epco
 _job_start_param = dbutils.widgets.get("job_start_time_ms").strip()
 JOB_START_TIME_MS = int(_job_start_param) if _job_start_param.isdigit() else None
 
+# addind two parameters
+dbutils.widgets.text('target_statement_hash',"","Scope this run to one statement_hash(blank = full sweep)")
+dbutils.widgets.text('target_source_path',"","Scope this run to one source_path(blank = full sweep)")
+
+TARGET_STATEMENT_HASH = dbutils.widgets.get('target_statement_hash').strip()
+TARGET_SOURCE_PATH = dbutils.widgets.get('target_source_path').strip()
+
+
 dbutils.widgets.text("catalog", "edp_bfil_prod", "Unity Catalog name")
 dbutils.widgets.text("bronze_schema","analytics_team","Bronze schema")
 dbutils.widgets.text("silver_schema","analytics_team","Silver schema")
@@ -16,6 +24,7 @@ dbutils.widgets.text("gold_schema","analytics_team","Gold schema")
 dbutils.widgets.text("raw_volumne_path","/Volumes/edp_bfil_prod/analytics_team/bsa_raw_statements/incoming","Raw PDF volumne path")
 
 dbutils.widgets.text("chekpoint_volumne_path","/Volumes/edp_bfil_prod/analytics_team/bsa_raw_statements/_checkpoints","Auto Loader checkpoint path")
+
 
 CATALOG = dbutils.widgets.get('catalog')
 BRONZE_SCHEMA = dbutils.widgets.get('bronze_schema')
@@ -55,7 +64,8 @@ DATE_PATTERNS = [
 ]
 
 TRANSACTION_TYPE_RULES = [
-    ('UPI',     r"\bupi[/\-]"),
+    # ('UPI',     r"\bupi[/\-]"),
+    ('UPI',     r"\bupi[a-z]{0,3}[/\-] } " ),
     ('NEFT',     r"\bneft[/\-]"),
     ('RTGS',     r"\brtgs[/\-]"),
     ('IMPS',     r"\bimps[/\-]"),
@@ -84,6 +94,28 @@ from pyspark.sql.functions import lit as _lit, current_timestamp as _current_tim
 from pyspark.sql import functions as F
 from pyspark.sql import Row
 
+# BELOW DATA_FORMATS AND _PARSE_DATE_LOSE IS USED FOR CHECKING THE ORDER OF THE STATEMENT
+from datetime import datetime
+
+_DATE_FORMATS = [
+    "%d/%m/%y","%d/%m/%Y","%d-%m-%y","%d-%m-%Y","%d.%m.%y","%d.%m.%Y",
+    "%d/%b/%Y","%d-%b-%Y","%d %b %Y","%d/%b/%y","%d-%b-%y",
+    "%Y-%m-%d","%Y/%m/%d"
+]
+
+def _parse_date_loose(date_str):
+    if not date_str:
+        return None
+    s = str(date_str).strip()
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(s,fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+
 
 # ============================================================
 # RETRY / REPROCESSING POLICY
@@ -93,10 +125,10 @@ from pyspark.sql import Row
 # becomes eligible for reprocessing at that stage again -- no manual hash
 # deletion, no separate backfill script to remember to run.
 STAGE_LOGIC_VERSIONS = {
-    "pdf_extraction": 1,
-    "classification": 5,
-    "validation": 1,
-    "merge": 1,
+    "pdf_extraction": 2,
+    "classification": 16,
+    "validation": 10,
+    "merge": 3,
 }
 
 # A statement stops being auto-retried after this many FAILED attempts at a
@@ -256,6 +288,8 @@ def get_eligible_statements(stage: str, candidates_df, key_col: str = "statement
         (this also brings NEEDS_REVIEW statements back in, deliberately --
         a real fix deserves a fresh shot regardless of retry history).
     """
+    if TARGET_STATEMENT_HASH:
+        candidates_df = candidates_df.filter(F.col(key_col)==TARGET_STATEMENT_HASH)
     status_col, _, _ = _STAGE_COLUMNS[stage]
     attempt_col = _attempt_col(stage)
     version_col = _version_col(stage)
@@ -415,7 +449,7 @@ def extract_pdfs(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.DataFrame]:
                         all_tables.extend(page_tables)
                     raw_text = "\n".join(page_texts)
                     table_row_count = sum(len(t) for t in all_tables)
-                    tables_json = json.dumps(all_tables[:50])
+                    tables_json = json.dumps(all_tables[:500])
 
             except Exception as e:
                 extraction_error = str(e)[:500]
