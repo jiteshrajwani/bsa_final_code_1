@@ -1,4 +1,4 @@
-%run ./00_config
+%run ./00_config;
 
 # IMPORTING ALL THE LIBRARIES
 from typing import Iterator 
@@ -31,6 +31,11 @@ def validate_statement_partition(iterator: Iterator[pd.DataFrame]) -> Iterator[p
             t0 = time.time()
             try:
                 group = group.sort_values("line_no")
+                # Added below three line for correct order of the statement (Ascending/Desceding)
+                first_date = _parse_date_loose(group.iloc[0]['txn_date_raw'])
+                last_date = _parse_date_loose(group.iloc[-1]['txn_date_raw'])
+                if first_date and last_date and last_date < first_date:
+                    group = group.iloc[::-1].reset_index(drop=True)
                 total_lines = len(group)
                 mismatches = 0
                 reconciled = 0
@@ -122,7 +127,7 @@ eligible_hashes = get_eligible_statements("validation", txns_to_validate_candida
 
 txns_to_validate = (
     spark.table(TBL_SILVER_TRANSACTIONS)
-    .select('statement_hash','line_no','debit_amount','credit_amount','running_balance')
+    .select('statement_hash','line_no','txn_date_raw','debit_amount','credit_amount','running_balance')
     .join(eligible_hashes, on='statement_hash', how='inner')
     .repartition('statement_hash')
     .sortWithinPartitions('statement_hash','line_no')
