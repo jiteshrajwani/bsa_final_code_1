@@ -1,9 +1,42 @@
-%run ./00_config
+$run ./00_config;
 
 # IMPORTING THE LIBRARIES
 from pyspark.sql import functions as F
+import pandas as pd
 import time
 from delta.tables import DeltaTable
+from pyspark.sql.types import StructType,StructField,StringType,DoubleType
+
+
+OPENING_BALANCE_SCHEMA = StructType([
+    StructField('statement_hash',StringType()),
+    StructField('opening_balance',DoubleType()),
+])
+# def compute_opening_balance_partition(iterator):
+#     for batch in iterator:
+#         results = []
+#         for statement_hash,group in batch.groupby('statement_hash'):
+#             group = group.sort_values('line_no')
+#             first_row,last_row = group.iloc[0],group.iloc[-1]
+
+#             first_date = _parse_date_loose(first_row['txn_date_raw'])
+#             last_date = _parse_date_loose(last_row['txn_date_raw'])
+
+#             if first_date and last_date and last_date < first_date:
+#                 first_row = group.iloc[-1]
+
+#             bal = first_row['running_balance']
+#             debit = 0.0 if pd.isna(first_row['debit_amount']) else first_row['debit_amount']
+#             credit = 0.0 if pd.isna(first_row['credit_amount']) else first_row['credit_amount']
+
+#             opening_balance = None if pd.isna(bal) else bal - debit + credit
+#             results.append({'statement_hash':statement_hash,'opening_balance':opening_balance})
+#         yield pd.DataFrame(results,columns=['statement_hash','opening_balance'])
+
+
+from pyspark.sql.window import Window
+from collections import defaultdict
+
 
 # CREATING THE FINAL GOLD TABLE
 spark.sql(f"""
@@ -23,6 +56,8 @@ spark.sql(f"""
         bounce_or_reversal_count long,
         emi_txn_count long,
         distinct_txn_types long,
+        opening_balance double,
+        closing_balance DOUBLE,
         computed_at Timestamp) using delta
         """)
 
@@ -32,6 +67,7 @@ ensure_table_columns(TBL_GOLD_ACCOUNT_FEATURES, {
     "min_balance": "DOUBLE", "max_balance": "DOUBLE", "avg_balance": "DOUBLE",
     "salary_credit_count": "LONG", "atm_withdrawl_count": "LONG", "upi_txn_count": "LONG",
     "bounce_or_reversal_count": "LONG", "emi_txn_count": "LONG", "distinct_txn_types": "LONG",
+    "opening_balance":'DOUBLE',"closing_balance":"DOUBLE",
     "computed_at": "TIMESTAMP",
 })
 
@@ -73,6 +109,51 @@ try:
             F.countDistinct("txn_type").alias("distinct_txn_types"),
         )
         .withColumn("computed_at", F.current_timestamp())
+    )
+
+    # opening_balance_df = (
+    #     txns.select('statement_hash','line_no','txn_date_raw','running_balance','debit_amount','credit_amount')
+    #     .repartition('statement_hash')
+    #     .mapInPandas(compute_opening_balance_partition,schema=OPENING_BALANCE_SCHEMA)
+    # )
+    edge_rows = (
+    txns
+    .withColumn("rn_asc", F.row_number().over(Window.partitionBy("statement_hash").orderBy(F.col("line_no").asc())))
+    .withColumn("rn_desc", F.row_number().over(Window.partitionBy("statement_hash").orderBy(F.col("line_no").desc())))
+    .filter((F.col("rn_asc") == 1) | (F.col("rn_desc") == 1))
+    .select("statement_hash", "rn_asc", "rn_desc", "txn_date_raw", "debit_amount", "credit_amount", "running_balance")
+    .collect()
+    )
+
+    by_stmt = defaultdict(dict)
+    for r in edge_rows:
+        if r["rn_asc"] == 1:
+            by_stmt[r["statement_hash"]]["first"] = r
+        if r["rn_desc"] == 1:
+            by_stmt[r["statement_hash"]]["last"] = r
+
+    opening_rows = []
+    for stmt_hash, edges in by_stmt.items():
+        first_row, last_row = edges.get("first"), edges.get("last")
+        if first_row is None:
+            continue
+
+        first_date = _parse_date_loose(first_row["txn_date_raw"])
+        last_date = _parse_date_loose(last_row["txn_date_raw"]) if last_row else None
+        chosen = last_row if (first_date and last_date and last_date < first_date) else first_row
+
+        bal = chosen["running_balance"]
+        debit = chosen["debit_amount"] or 0.0
+        credit = chosen["credit_amount"] or 0.0
+        opening_balance = None if bal is None else bal - credit + debit
+        opening_rows.append((stmt_hash, opening_balance))
+
+    opening_balance_df = spark.createDataFrame(opening_rows, schema=OPENING_BALANCE_SCHEMA)
+
+    features_df = (
+        features_df
+        .join(opening_balance_df,on='statement_hash',how='left')
+        .withColumn('closing_balance', F.col('opening_balance') + F.col('total_inflow') - F.col('total_outflow') )
     )
 
     # materialize once via staging (serverless has no .cache()/.persist())
