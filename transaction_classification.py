@@ -243,6 +243,7 @@ def _map_table_columns(header_row):
 _MONEY_RE = re.compile(r"^\(?[\d,]+\.\d{1,2}\)?$")
 _CURRENCY_PREFIX_RE = re.compile(r"^[₹$]\s*|^(rs\.?|inr)\s*", re.IGNORECASE)
 _TRAILING_LABEL_RE = re.compile(r"\s*(cr|dr)\.?$", re.IGNORECASE)
+_TRAILING_PAREN_LABEL_RE = re.compile(r"\s*\((cr|dr)\)\s*$",re.IGNORECASE)
 
 def _clean_amount(cell):
     """Handles plain numbers as well as bank-formatted variants:
@@ -253,6 +254,7 @@ def _clean_amount(cell):
     if not text:
         return None
     text = _CURRENCY_PREFIX_RE.sub("", text).strip()
+    text = _TRAILING_PAREN_LABEL_RE.sub("",text).strip()
     text = _TRAILING_LABEL_RE.sub("", text).strip()
     negative = text.startswith("(") and text.endswith(")")
     if negative:
@@ -264,6 +266,22 @@ def _clean_amount(cell):
         return -value if negative else value
     except ValueError:
         return None
+
+
+_AMOUNT_DIRECTION_RE = re.compile(r"\(?\s*(cr|dr)\s*\)?\s*$",re.IGNORECASE)
+
+def _extract_amount_direction(cell) -> str:
+    """
+    Reads a dr/cr marker straight off a raw amount cell, bare ('1,1896.69 Cr') or 
+    paranthezeid ('245 (Dr)). This is the bank owns explicit signal on the amount itself,
+    so it should be checked before falling back to a sepearte drcr column or narration guessing
+    """
+    if not cell:
+        return "UNKNOWN"
+    m = _AMOUNT_DIRECTION_RE.search(str(cell).strip())
+    if not m:
+        return "UNKNOWN"
+    return "DEBIT" if m.group(1).lower() =='dr' else "CREDIT"
 
 
 # PARSING THE TABLE
@@ -287,13 +305,30 @@ def _parse_table_rows(rows: list, col_map: dict) -> List[Dict]:
 
         # Alternate layout: single Amount column + Dr/Cr flag column,
         # instead of split Debit/Credit columns -- a real, common variant
+        # if debit is None and credit is None and 'amount' in col_map and col_map['amount'] < len(row):
+        #     amount = _clean_amount(row[col_map['amount']])
+        #     if amount is not None:
+        #         direction = 'UNKNOWN'
+        #         if 'drcr' in col_map and col_map['drcr'] < len(row):
+        #             direction = _infer_direction_from_flag(row[col_map['drcr']])
+        #         if direction == 'UNKNOWN':
+        #             direction = _infer_direction_from_narration(narration)
+        #         if direction == 'UNKNOWN':
+        #             txn_type_guess, _ = _classify_transaction_type(narration)
+        #             direction = "CREDIT" if txn_type_guess in {"SALARY_CREDIT","INTEREST","REVERSAL","CASH_DEPOSIT"} else "DEBIT"
+        #         if direction == 'CREDIT':
+        #             credit = amount
+        #         else:
+        #             debit = amount
+
         if debit is None and credit is None and 'amount' in col_map and col_map['amount'] < len(row):
-            amount = _clean_amount(row[col_map['amount']])
+            amount_cell = row[col_map['amount']]
+            amount = _clean_amount(amount_cell)
             if amount is not None:
-                direction = 'UNKNOWN'
-                if 'drcr' in col_map and col_map['drcr'] < len(row):
+                direction = _extract_amount_direction(amount_cell)
+                if direction == 'UNKNOWN' and 'drcr' in col_map and col_map['drcr']<len(row):
                     direction = _infer_direction_from_flag(row[col_map['drcr']])
-                if direction == 'UNKNOWN':
+                if direction == "UNKNOWN":
                     direction = _infer_direction_from_narration(narration)
                 if direction == 'UNKNOWN':
                     txn_type_guess, _ = _classify_transaction_type(narration)
@@ -302,6 +337,8 @@ def _parse_table_rows(rows: list, col_map: dict) -> List[Dict]:
                     credit = amount
                 else:
                     debit = amount
+
+
 
         if balance is None or (debit is None and credit is None):
             money_cells = [c for c in row if _clean_amount(c) is not None]
@@ -337,6 +374,21 @@ def _parse_table_rows(rows: list, col_map: dict) -> List[Dict]:
     return parsed
 
 
+def _flatten_table_text(table:list) -> str:
+    """
+    Join every cell in a table block into raw text, one cell per line,
+    for handing to the text-line parser when the block's own structure
+    coudln't be read as a normal column table (e.g. a styled/graphic page 
+    header breaking pdfplumber grid detection, crushing real transaction 
+    rows into one oversized cell)
+    """
+    lines = []
+    for row in tables:
+        for cell in row:
+            if cell:
+                lines.append(str(cell))
+    return '\n'.join(lines) 
+
 
 def _parse_tables(tables_json: str) -> List[Dict]:
     parsed = []
@@ -366,10 +418,18 @@ def _parse_tables(tables_json: str) -> List[Dict]:
             # any stray/garbage rows automatically.
             col_map = last_good_col_map
             data_rows = table
-        else:
-            continue  # no header seen anywhere yet in this document
+        # else:
+        #     continue  # no header seen anywhere yet in this document
+        # parsed.extend(_parse_table_rows(data_rows, col_map))
 
-        parsed.extend(_parse_table_rows(data_rows, col_map))
+        else:
+            parsed.extend(_parse_lines(_flatten_table_text(table)  ))
+            continue
+        
+        block_rows = _parse_table_rows(data_rows,col_map)
+        if not block_rows:
+            block_rows = _parse_lines(_flatten_table_text(table))
+        parsed.extend(block_rows)
 
     return parsed
 
