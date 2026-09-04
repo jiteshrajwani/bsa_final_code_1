@@ -1,4 +1,3 @@
-%run ./00_config
 
 from pyspark.sql import functions as F
 from delta.tables import DeltaTable
@@ -16,12 +15,49 @@ eligible = get_eligible_statements("pdf_extraction", candidates)
 
 paths_to_reprocess = [r["source_path"] for r in eligible.select("source_path").distinct().collect()]
 
+# if not paths_to_reprocess:
+#     print("Bronze backfill: nothing eligible for re-extraction.")
+# else:
+#     print(f"Bronze backfill: re-extracting {len(paths_to_reprocess)} file(s).")
+
+#     raw_batch_df = spark.read.format("binaryFile").load(paths_to_reprocess)
+
+
 if not paths_to_reprocess:
     print("Bronze backfill: nothing eligible for re-extraction.")
 else:
-    print(f"Bronze backfill: re-extracting {len(paths_to_reprocess)} file(s).")
+    # Not every historical statement's source file is guaranteed to still
+    # exist in the Volume (old test uploads, manual cleanup, etc). A
+    # single missing path fails the entire binaryFile batch load, so check
+    # existence first and handle the two groups separately instead of
+    # letting one stale reference block everyone else's legitimate backfill.
+    existing_paths, missing_paths = [], []
+    for p in paths_to_reprocess:
+        try:
+            dbutils.fs.ls(p)
+            existing_paths.append(p)
+        except Exception:
+            missing_paths.append(p)
 
-    raw_batch_df = spark.read.format("binaryFile").load(paths_to_reprocess)
+    if missing_paths:
+        print(f"Bronze backfill: {len(missing_paths)} source file(s) no longer exist, marking FAILED: {missing_paths}")
+        missing_log_rows = (
+            eligible.filter(F.col("source_path").isin(missing_paths))
+            .select("statement_hash", "source_path")
+            .distinct()
+            .withColumn("status", F.lit("FAILED"))
+            .withColumn("duration_sec", F.lit(0.0))
+            .withColumn("error", F.lit("Source file no longer exists in Volume"))
+        )
+        log_pipeline_stage(spark, "pdf_extraction", missing_log_rows)
+
+    if not existing_paths:
+        print("Bronze backfill: no existing files left to re-extract.")
+    else:
+        print(f"Bronze backfill: re-extracting {len(existing_paths)} file(s).")
+
+        raw_batch_df = spark.read.format("binaryFile").load(existing_paths)
+
 
     extracted_df = (
         raw_batch_df.select("path", "content")
