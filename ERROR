@@ -1,68 +1,73 @@
-PROC SORT ... NODUPKEY keeps the first row for each BY-group after sorting.
-
-Your SAS code:
-
-proc sort data=JR.center_prev_6_&t_1_m nodupkey;
-by centerStaffID CenterId descending Month;
-run;
-
-
-means:
-
-Sort by:
-centerStaffID ascending
-CenterId ascending
-Month descending
-For each (centerStaffID, CenterId) combination, keep only the latest Month record.
-PySpark equivalent
-from pyspark.sql import functions as F
-from pyspark.sql.window import Window
-
-w = Window.partitionBy(
-    "centerStaffID",
-    "CenterId"
-).orderBy(
-    F.col("Month").desc()
+CREATE OR REPLACE TEMPORARY VIEW BFIL_SBA_CAA_ACCOUNTS1 AS
+SELECT  A.BRANCH_CODE AS IBLBRANCHCODE,
+        B.SOL_DESC As IBLBRANCHNAME,
+        A.CUSTOMER_NO AS CUSTOMERNO,
+        A.ACCOUNT_NO AS ACCOUNTNUMBER,
+        CAST(A.ACCT_OPN_DATE AS DATE) AS ACCOUNTOPENDATE,
+        (CASE WHEN UPPER(A.SCHM_TYPE)='SBA' THEN 'SA'
+              WHEN UPPER(A.SCHM_TYPE)='CAA' THEN 'CA'
+              WHEN UPPER(A.SCHM_TYPE)='TDA' AND UPPER(A.SCHM_CODE) IN ('RDMIS','RDMIC','RDBFL','RDSBL') THEN 'RD'
+              WHEN UPPER(A.SCHM_TYPE)='TDA' AND UPPER(A.SCHM_CODE) IN ('TRMIS','TRMIC','TDBFL','TDSBL') THEN 'FD'
+        ELSE 'OTHERS' END) AS ACCOUNTTYPE,
+        A.SCHM_CODE AS SCHEMECODE,
+        A.C5CODE,
+        A.CLASSIFICATION_CODE AS P2CODE,
+        (CASE WHEN CAST(A.ACCT_OPN_DATE AS DATE) <= '2026-03-31' THEN 'ETB' ELSE 'NTB' END) AS IS_ETB_NTB,
+        A.ACCT_CLS_DATE AS CLOSUREDATE,
+        (CASE
+            /* BMS */
+              WHEN UPPER(A.SCHM_CODE) IN ('SBMIC') AND UPPER(A.C5CODE) IN ('BM','BN','LA') AND UPPER(A.CLASSIFICATION_CODE) IN ('NH','URC','NBF') THEN 'BMS-NM'
+              WHEN UPPER(A.SCHM_CODE) IN ('CABFI') AND UPPER(A.C5CODE) = 'BL' THEN 'BMS'
+              /* MFI */
+              WHEN UPPER(A.SCHM_CODE) IN ('SBINP') AND UPPER(A.C5CODE) IN ('LA') THEN 'MFI'
+              WHEN UPPER(A.SCHM_CODE) IN ('SBMIC') AND UPPER(A.C5CODE) IN ('BM','BN','LA') THEN 'MFI'
+              /* CSU */
+              WHEN UPPER(A.SCHM_CODE) IN ('SBBFL') AND UPPER(A.C5CODE) IS NULL THEN 'CSU'
+              WHEN UPPER(A.SCHM_CODE) IN ('SBGEN') AND UPPER(A.C5CODE) IN ('FA','FB') THEN 'CSU'
+            /* BSS */
+              WHEN UPPER(A.SCHM_CODE) IN ('SBMIC') AND UPPER(A.C5CODE) = 'CM' THEN 'BSS'
+              WHEN UPPER(A.SCHM_CODE) IN ('CABFT') AND UPPER(A.C5CODE) = 'CBM' THEN 'BSS'
+              WHEN UPPER(A.SCHM_CODE) IN ('CABFI') AND UPPER(A.C5CODE) = 'CBM' THEN 'BSS'
+            /* RD */
+              WHEN UPPER(A.SCHM_CODE) IN ('RDMIS','RDMIC','RDBFL','RDSBL') THEN 'RD'
+              WHEN UPPER(A.SCHM_CODE) IN ('TRMIS','TRMIC','TDBFL','TDSBL') THEN 'FD'
+        ELSE 'OTHERS' END ) AS SBU
+FROM EDP_DATAWAREHOUSE_PRD.EDW.DIMACCOUNT AS A
+LEFT JOIN EDP_CURATED_DATAMART_PRD.FINACLE.SOL AS B ON B.SOL_ID = A.BRANCH_CODE
+WHERE ISDELETE = 0 AND UPPER(SCHM_TYPE) IN ('SBA','CAA','TDA')
+AND
+-- ((UPPER(A.SCHM_CODE) IN ('SBMIC','SBGEN') AND A.C5CODE IN ('BM','BN','LA','FA','FB','CT','PC','PE','CM'))  --> SA
+((UPPER(A.SCHM_CODE) IN ('SBMIC') AND A.C5CODE IN ('BM','BN','LA','CM'))  --> SA
+OR (UPPER(A.SCHM_CODE) IN ('SBGEN') AND A.C5CODE IN ('FA','FB'))  --> SA
+OR (UPPER(A.SCHM_CODE) IN ('SBINP') AND UPPER(A.C5CODE) IN ('LA') AND UPPER(A.FREE_CODE_4)='IBG') ---> SA
+OR (UPPER(A.SCHM_CODE) IN ('SBBFL') AND UPPER(A.C5CODE) IS NULL) ---> CSU SA
+OR (UPPER(A.SCHM_CODE) IN ('CABFT','CABFI') AND UPPER(C5CODE) IN ('CBM','BL')) ---> CA
 )
-
-result = (
-    df
-    .withColumn("rn", F.row_number().over(w))
-    .filter(F.col("rn") == 1)
-    .drop("rn")
-)
-
-Example
-
-Input:
-
-+-------------+--------+----------+
-|centerStaffID|CenterId|Month     |
-+-------------+--------+----------+
-|1001         |A       |2026-03-01|
-|1001         |A       |2026-05-01|
-|1001         |A       |2026-04-01|
-|1002         |B       |2026-02-01|
-|1002         |B       |2026-06-01|
-+-------------+--------+----------+
+AND CAST(A.ACCT_CLS_DATE AS DATE)>=ADD_MONTHS(CURRENT_DATE()-1, -12);
 
 
-Output:
 
-+-------------+--------+----------+
-|centerStaffID|CenterId|Month     |
-+-------------+--------+----------+
-|1001         |A       |2026-05-01|
-|1002         |B       |2026-06-01|
-+-------------+--------+----------+
-
-Why dropDuplicates() is not enough
-
-This:
-
-df.dropDuplicates(["centerStaffID", "CenterId"])
-
-
-is not equivalent because Spark can keep any row from each group.
-
-The SAS code explicitly sorts by Month DESC first and then keeps the first record, so the correct PySpark translation is the row_number() window approach above.
+/* TDA */
+CREATE OR REPLACE TEMPORARY VIEW BSS_TDA_ACCOUNTS AS
+SELECT  A.BRANCH_CODE AS IBLBRANCHCODE,
+        C.SOL_DESC As IBLBRANCHNAME,
+        A.CUSTOMER_NO AS CUSTOMERNO,
+        A.ACCOUNT_NO AS ACCOUNTNUMBER,
+        CAST(A.ACCT_OPN_DATE AS DATE) AS ACCOUNTOPENDATE,
+        (CASE WHEN UPPER(A.SCHM_TYPE)='SBA' THEN 'SA'
+              WHEN UPPER(A.SCHM_TYPE)='CAA' THEN 'CA'
+              WHEN UPPER(A.SCHM_TYPE)='TDA' AND UPPER(A.SCHM_CODE) IN ('RDMIS','RDMIC','RDBFL','RDSBL') THEN 'RD'
+              WHEN UPPER(A.SCHM_TYPE)='TDA' AND UPPER(A.SCHM_CODE) IN ('TRMIS','TRMIC','TDBFL','TDSBL') THEN 'FD'
+        ELSE 'OTHERS' END) AS ACCOUNTTYPE,
+        A.SCHM_CODE AS SCHEMECODE,
+        A.C5CODE,
+        A.CLASSIFICATION_CODE AS P2CODE,
+        (CASE WHEN CAST(A.ACCT_OPN_DATE AS DATE) <= '2026-03-31' THEN 'ETB' ELSE 'NTB' END) AS IS_ETB_NTB,
+        A.ACCT_CLS_DATE AS CLOSUREDATE,
+        IFNULL(B.SBU,'OTHERS') AS SBU
+FROM EDP_DATAWAREHOUSE_PRD.EDW.DIMACCOUNT AS A
+LEFT JOIN BFIL_SBA_CAA_ACCOUNTS1 AS B ON B.CUSTOMERNO = A.CUSTOMER_NO
+LEFT JOIN EDP_CURATED_DATAMART_PRD.FINACLE.SOL AS C ON C.SOL_ID = A.BRANCH_CODE
+WHERE ISDELETE = 0 AND UPPER(SCHM_TYPE) IN ('TDA')
+AND (UPPER(SCHM_CODE) IN ('RDMIS','RDMIC','RDBFL','RDSBL','TRMIS','TRMIC','TDBFL','TDSBL')) ---> TD
+AND (ACCT_CLS_DATE IS NULL OR CAST(ACCT_CLS_DATE AS DATE)>='2026-04-01'); ---> For Active Accounts and Closed in this FY'27.;
