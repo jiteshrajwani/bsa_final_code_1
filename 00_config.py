@@ -18,30 +18,25 @@ TARGET_SOURCE_PATH = dbutils.widgets.get('target_source_path').strip()
 
 
 dbutils.widgets.text("catalog", "edp_bfil_prod", "Unity Catalog name")
-dbutils.widgets.text("bronze_schema","analytics_team","Bronze schema")
-dbutils.widgets.text("silver_schema","analytics_team","Silver schema")
-dbutils.widgets.text("gold_schema","analytics_team","Gold schema")
+dbutils.widgets.text('schema','analytics_team','Schema Name')
 dbutils.widgets.text("raw_volumne_path","/Volumes/edp_bfil_prod/analytics_team/bsa_raw_statements/incoming","Raw PDF volumne path")
-
 dbutils.widgets.text("chekpoint_volumne_path","/Volumes/edp_bfil_prod/analytics_team/bsa_raw_statements/_checkpoints","Auto Loader checkpoint path")
 
 
 CATALOG = dbutils.widgets.get('catalog')
-BRONZE_SCHEMA = dbutils.widgets.get('bronze_schema')
-SILVER_SCHEMA = dbutils.widgets.get('silver_schema') 
-GOLD_SCHEMA = dbutils.widgets.get('gold_schema')
+SCHEMA = dbutils.widgets.get('schema') 
 RAW_VOLUME_PATH = dbutils.widgets.get('raw_volumne_path')
 CHECKPOINT_VOLUME_PATH = dbutils.widgets.get("chekpoint_volumne_path")
 
 # Fully qualified table names used across all stage notebooks
-TBL_BRONZE_EXTRACTION = f"{CATALOG}.{BRONZE_SCHEMA}.bsa_statement_extraction_raw"
-TBL_SILVER_TRANSACTIONS = f"{CATALOG}.{SILVER_SCHEMA}.bsa_classified_transactions"
-TBL_SILVER_VALIDATED = f"{CATALOG}.{SILVER_SCHEMA}.bsa_validated_transactions"
-TBL_GOLD_ACCOUNT_FEATURES = f"{CATALOG}.{GOLD_SCHEMA}.bsa_account_features"
-TBL_BRONZE_STAGING = f"{CATALOG}.{BRONZE_SCHEMA}.bsa_extraction_staging"
-TBL_SILVER_STAGING = f"{CATALOG}.{SILVER_SCHEMA}.bsa_classified_staging"
-TBL_SILVER_VALIDATED_STAGING = f"{CATALOG}.{SILVER_SCHEMA}.bsa_validation_staging"
-TBL_GOLD_STAGING = f"{CATALOG}.{GOLD_SCHEMA}.bsa_features_staging"
+TBL_BRONZE_EXTRACTION = f"{CATALOG}.{SCHEMA}.bsa_statement_extraction_raw"
+TBL_SILVER_TRANSACTIONS = f"{CATALOG}.{SCHEMA}.bsa_classified_transactions"
+TBL_SILVER_VALIDATED = f"{CATALOG}.{SCHEMA}.bsa_validated_transactions"
+TBL_GOLD_ACCOUNT_FEATURES = f"{CATALOG}.{SCHEMA}.bsa_account_features"
+TBL_BRONZE_STAGING = f"{CATALOG}.{SCHEMA}.bsa_extraction_staging"
+TBL_SILVER_STAGING = f"{CATALOG}.{SCHEMA}.bsa_classified_staging"
+TBL_SILVER_VALIDATED_STAGING = f"{CATALOG}.{SCHEMA}.bsa_validation_staging"
+TBL_GOLD_STAGING = f"{CATALOG}.{SCHEMA}.bsa_features_staging"
 
 
 EXTRACTION_CONFIDENCE_THRESHOLD = 0.60
@@ -54,8 +49,133 @@ BANK_KEYWORDS = {
     "KOTAK" : ['kotak mahindra','kotak.com'],
     "INDUSIND" : ['indusind bank','indusind.com'],
     "PNB" : ['punjab national bank'],
-    "BOB" : ['bank of baroda']
+    "BOB" : ['bank of baroda'],
+    "CB": ["Central Bank of India","CENTRAL BANK OF INDIA"]
 }
+
+bank_ifsc_map = {
+    # ---------------------------------------------------------
+    # Public-sector banks
+    # ---------------------------------------------------------
+    "BARB": "Bank of Baroda",
+    "BKID": "Bank of India",
+    "MAHB": "Bank of Maharashtra",
+    "CNRB": "Canara Bank",
+    "CBIN": "Central Bank of India",
+    "IDIB": "Indian Bank",
+    "IOBA": "Indian Overseas Bank",
+    "PSIB": "Punjab and Sind Bank",
+    "PUNB": "Punjab National Bank",
+    "SBIN": "State Bank of India",
+    "UCBA": "UCO Bank",
+    "UBIN": "Union Bank of India",
+
+    # ---------------------------------------------------------
+    # Private-sector banks
+    # ---------------------------------------------------------
+    "AUBL": "AU Small Finance Bank",
+    "BDBL": "Bandhan Bank",
+    "CSBK": "CSB Bank",
+    "CIUB": "City Union Bank",
+    "DCBL": "DCB Bank",
+    "DLXB": "Dhanlaxmi Bank",
+    "FDRL": "Federal Bank",
+    "HDFC": "HDFC Bank",
+    "ICIC": "ICICI Bank",
+    "IBKL": "IDBI Bank",
+    "IDFB": "IDFC FIRST Bank",
+    "INDB": "IndusInd Bank",
+    "JAKA": "Jammu and Kashmir Bank",
+    "KARB": "Karnataka Bank",
+    "KVBL": "Karur Vysya Bank",
+    "KKBK": "Kotak Mahindra Bank",
+    "NTBL": "Nainital Bank",
+    "RATN": "RBL Bank",
+    "SIBL": "South Indian Bank",
+    "TMBL": "Tamilnad Mercantile Bank",
+    "UTIB": "Axis Bank",
+    "YESB": "YES Bank",
+
+    # ---------------------------------------------------------
+    # Small-finance banks
+    # ---------------------------------------------------------
+    "AUBL": "AU Small Finance Bank",
+    "CLBL": "Capital Small Finance Bank",
+    "ESMF": "ESAF Small Finance Bank",
+    "ESFB": "Equitas Small Finance Bank",
+    "JSFB": "Jana Small Finance Bank",
+    "NESF": "North East Small Finance Bank",
+    "SHBL": "Shivalik Small Finance Bank",
+    "SURY": "Suryoday Small Finance Bank",
+    "UJVN": "Ujjivan Small Finance Bank",
+    "UNBA": "Unity Small Finance Bank",
+    "UTKS": "Utkarsh Small Finance Bank",
+
+    # ---------------------------------------------------------
+    # Payments banks
+    # ---------------------------------------------------------
+    "AIRP": "Airtel Payments Bank",
+    "FINO": "Fino Payments Bank",
+    "IPOS": "India Post Payments Bank",
+    "JIOP": "Jio Payments Bank",
+    "NSPB": "NSDL Payments Bank",
+    "PYTM": "Paytm Payments Bank",
+
+    # ---------------------------------------------------------
+    # Major state and scheduled cooperative banks
+    # ---------------------------------------------------------
+    "ABHY": "Abhyudaya Cooperative Bank",
+    "ADCC": "Akola District Central Cooperative Bank",
+    "AHDC": "Ahmednagar District Central Cooperative Bank",
+    "AMCB": "Ahmedabad Mercantile Cooperative Bank",
+    "APBL": "Andhra Pradesh State Cooperative Bank",
+    "APMC": "A.P. Mahesh Cooperative Urban Bank",
+    "BCBM": "Bharat Cooperative Bank",
+    "COSB": "Cosmos Cooperative Bank",
+    "DNSB": "Dombivli Nagari Sahakari Bank",
+    "GSCB": "Gujarat State Cooperative Bank",
+    "HPSC": "Himachal Pradesh State Cooperative Bank",
+    "KACE": "Kangra Central Cooperative Bank",
+    "KSCB": "Karnataka State Cooperative Apex Bank",
+    "KSBK": "Kerala State Cooperative Bank",
+    "KUCB": "Karad Urban Cooperative Bank",
+    "MDCB": "Mumbai District Central Cooperative Bank",
+    "MSCI": "Maharashtra State Cooperative Bank",
+    "NKGS": "NKGSB Cooperative Bank",
+    "NMCB": "Nasik Merchants Cooperative Bank",
+    "PJSB": "Gopinath Patil Parsik Janata Sahakari Bank",
+    "RSCB": "Rajasthan State Cooperative Bank",
+    "SDCB": "Surat District Cooperative Bank",
+    "SRCB": "Saraswat Cooperative Bank",
+    "SVCB": "SVC Cooperative Bank",
+    "TDCB": "Thane District Central Cooperative Bank",
+    "TJSB": "TJSB Sahakari Bank",
+    "TSAB": "Telangana State Cooperative Apex Bank",
+    "UPCB": "Uttar Pradesh Cooperative Bank",
+    "WBSC": "West Bengal State Cooperative Bank",
+
+    # ---------------------------------------------------------
+    # Regional rural banks and state-level rural banks
+    # ---------------------------------------------------------
+    "APGV": "Andhra Pradesh Grameena Vikas Bank",
+    "APGB": "Andhra Pragathi Grameena Bank",
+    "ARYX": "Aryavart Bank",
+    "BARB": "Baroda Gujarat Gramin Bank / Bank of Baroda",
+    "CRGB": "Chhattisgarh Rajya Gramin Bank",
+    "KLGB": "Kerala Gramin Bank",
+    "MAHG": "Maharashtra Gramin Bank",
+    "PKGB": "Karnataka Gramin Bank",
+    "RMGB": "Rajasthan Marudhara Gramin Bank",
+    "TGRB": "Telangana Grameena Bank",
+    "TNGB": "Tamil Nadu Grama Bank",
+
+    # ---------------------------------------------------------
+    # Reserve Bank of India
+    # ---------------------------------------------------------
+    "RBIS": "Reserve Bank of India",
+}
+
+IFSC_PATTERN = r"\b(?:IFS|IFSC)\s*(?:code)?\s*[:\-]?\s*([A-Z]{4}0[0-9]{6})\b"
 
 DATE_PATTERNS = [
     r"\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}",
@@ -125,7 +245,7 @@ def _parse_date_loose(date_str):
 # becomes eligible for reprocessing at that stage again -- no manual hash
 # deletion, no separate backfill script to remember to run.
 STAGE_LOGIC_VERSIONS = {
-    "pdf_extraction": 2,
+    "pdf_extraction": 8,
     "classification": 16,
     "validation": 10,
     "merge": 3,
@@ -142,7 +262,7 @@ RETRY_CAP = 3
 _STAGE_ORDER = ["pdf_extraction", "classification", "validation", "merge"]
 
 
-TBL_PIPELINE_LOG = f"{CATALOG}.{SILVER_SCHEMA}.bsa_pipeline_log"
+TBL_PIPELINE_LOG = f"{CATALOG}.{SCHEMA}.bsa_pipeline_log"
 
 _STAGE_COLUMNS = {
     "pdf_extraction": ("pdf_extraction_status", "pdf_extraction_duration_sec", "pdf_extraction_error"),
@@ -388,6 +508,25 @@ def _identify_bank(text_lower: str) -> str:
     return "UNKNOWN"
 
 
+import re
+
+def bank_format_text_clean(text):
+    if not text:
+        return ""
+
+    # Remove PDF extraction artifacts such as:
+    # (cid:9), (cid:10), (cid:123), etc.
+    text = re.sub(r'\(cid:\d+\)', ' ', text, flags=re.IGNORECASE)
+
+    # Replace non-breaking spaces with regular spaces
+    text = text.replace('\xa0', ' ')
+
+    # Replace repeated spaces/tabs while preserving new lines
+    text = re.sub(r'[^\S\r\n]+', ' ', text)
+
+    return text
+
+
 def reset_statement_for_stages(stage: str, statement_hash: str):
     status_col,_,error_col = _STAGE_COLUMNS[stage]
     attempt_col = _attempt_col(stage)
@@ -401,6 +540,7 @@ def reset_statement_for_stages(stage: str, statement_hash: str):
               """)
 
 def _compute_confidence(raw_text: str, num_pages: int, table_row_count: int) -> float:
+    # upper loop for each page to get score for each page
     if not raw_text or num_pages == 0:
         return 0.0
 
@@ -412,7 +552,7 @@ def _compute_confidence(raw_text: str, num_pages: int, table_row_count: int) -> 
     has_date = any(re.search(p, raw_text) for p in DATE_PATTERNS)
     date_score = 1.0 if has_date else 0.0
 
-    printable = sum(1 for c in raw_text if c.isprintable())
+    printable = sum(1 for c in raw_text if c.isprintable()) # optimize this code
     garble_ratio = 1 - (printable / max(text_len, 1))
     garble_score = max(0.0, 1.0 - garble_ratio * 5)
 
@@ -424,6 +564,7 @@ def _compute_confidence(raw_text: str, num_pages: int, table_row_count: int) -> 
 def extract_pdfs(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.DataFrame]:
     """mapInPandas worker: extract text+tables from each PDF's binary content"""
     import pdfplumber  # imported here, not at module level -- see note above
+    import re
     for batch in iterator:
         out_rows = []
         for _, row in batch.iterrows():
@@ -456,7 +597,18 @@ def extract_pdfs(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.DataFrame]:
 
             extraction_duration_sec = round(time.time() - t0, 3)
             confidence = _compute_confidence(raw_text, num_pages, table_row_count)
-            bank_format = _identify_bank(raw_text.lower()) if raw_text else "UNKNOWN"
+            clean_text  = bank_format_text_clean(raw_text)
+            match = re.search(IFSC_PATTERN,clean_text,re.IGNORECASE)
+            actual_ifsc = None
+            bank_format = None
+            if match:
+                actual_ifsc = match.group(1).upper()
+                bank_prefix = actual_ifsc[:4]
+                bank_format = bank_ifsc_map.get(bank_prefix)
+            if not bank_format:
+                bank_format = _identify_bank(clean_text.lower())
+            if not bank_format:
+                bank_format = "UNKNOWN"
             route = "CPU" if confidence >= EXTRACTION_CONFIDENCE_THRESHOLD else "GPU_FALLBACK"
 
             out_rows.append({
