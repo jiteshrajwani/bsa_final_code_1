@@ -1,0 +1,439 @@
+dbutils.widgets.text('input_path','/mnt/your-storage-path/')
+input_path = dbutils.widgets.get('input_path')
+
+from pyspark import pipelines as dp
+from datetime import datetime 
+from dateutil.relativedelta import relativedelta
+from pyspark.sql import functions as F
+from pyspark.sql.window import Window
+
+
+# Step 1: Define the raw data source as a view
+@dp.view(
+    comment='Raw Data source with no assumption about headers'
+)
+def raw_data():
+    return (
+        spark.read.format('csv')
+        .option('header','false')
+        .load(input_path)
+    )
+
+# Step 2: Add a row number column to help indentify the header row deterministically
+@dp.view(
+    comment='Raw data with row numbers added to identify the header row'
+)
+def raw_data_with_row_number():
+    raw_data = raw_data()
+    row_number_window = Window.orderBy(F.lit(1))
+    return raw_data.withColumn('row_number',F.row_number().over(row_number_window))
+    
+
+# Step 3: Locate the header row and extract the header columns
+# @dp.view(
+#     comment='Filtered data starting from the row below the header'
+# )
+# def cleaned_data():
+#     raw_data_with_row_number =raw_data_with_row_number()
+
+#     header_row_df = raw_data_with_row_number.filter(F.col('_c0')=='Sl.No.')
+
+#     header_row_id = header_row_df.select('row_number').collect()[0][0]
+
+#     header_columns = [str(col).strip() for col in header_row_df.drop('row_number').collect()[0]]
+
+#     @dp.expect_or_fail(
+#         "check_required_columns",
+#         f"size(array_except(array('{','.join(REQUIRED_COLUMNS)}'), array({','.join([f'`{col}`' for col in header_columns])}))) = 0"
+#     )
+
+#     def validate_columns():
+#         pass
+
+#     filtered_df = raw_data_with_row_number.filter(F.col('row_number')>header_row_id).drop('row_number')
+
+#     return filtered_df.toDF(*header_columns)
+
+@dp.view(
+    comment='Filtered data starting from the row below the header'
+)
+def cleaned_data():
+    raw_data_with_row_number = raw_data_with_row_number()
+
+    # Locate the header row using a robust method
+    header_row_df = raw_data_with_row_number.filter(F.trim(F.col('_c0')) == 'Sl.No.')
+
+    # Collect the row ID of the header
+    header_row_id = header_row_df.select('row_number').first()[0]
+
+    # Extract header columns
+    header_columns = [
+        str(col).strip() 
+        for col in header_row_df.drop('row_number').first()
+    ]
+
+    @dp.expect_or_fail(
+        "check_required_columns",
+        f"size(array_except(array('{','.join(REQUIRED_COLUMNS)}'), array({','.join([f'`{col}`' for col in header_columns])}))) = 0"
+    )
+    def validate_columns():
+        pass
+
+    # Filter data starting from the rows after the header
+    filtered_df = raw_data_with_row_number.filter(F.col('row_number') > header_row_id).drop('row_number')
+
+    return filtered_df.toDF(*header_columns)
+
+# @dp.table(
+#     name=f'edp_bfil_prod.analytics_team.jr_advances_wrong_input{t_1_m}',
+#     comment='Transformed data with cleansed headers and column-specific transformations'
+# )
+
+# def jr_advances_data():
+#     final_df = cleaned_data()
+
+#     transformed_df = final_df.withColumn(
+#         'net_balance',
+#         F.regexp_replace(F.col('Net Balance'),',','').cast('decimal(38,18)')
+#     ).select(
+#         F.col('`Emp. no`').alias('emp_id'),
+#         F.col('Emp Name').alias('emp_name'),
+#         F.col('net_balance'),
+#         F.col('Business Type').alias('business_type')
+#     )
+#     return transformed_df
+@dp.table(
+    name=f'edp_bfil_prod.analytics_team.jr_advances_wrong_input{t_1_m}',
+    comment='Transformed data with cleansed headers and column-specific transformations'
+)
+def jr_advances_data():
+    final_df = cleaned_data()
+
+    # Perform transformations
+    transformed_df = final_df.withColumn(
+        'net_balance',
+        F.regexp_replace(F.col('`Net Balance`'), ',', '').cast('decimal(38,18)')
+    ).select(
+        F.col('`Emp. no`').alias('emp_id'),
+        F.col('`Emp Name`').alias('emp_name'),
+        F.col('net_balance'),
+        F.col('`Business Type`').alias('business_type')
+    )
+    return transformed_df
+
+
+
+-- ERRORS
+1ST ERRROR
+
+dlt.py4j_captured_exception.SparkException: Traceback (most recent call last):
+  File "REDACTED_LOCAL_PART@indusind.com/New Pipeline 2026-09-18 09:57/advances_data_code", cell 5, line 9, in raw_data
+dlt.py4j_captured_exception.SparkException: [INSUFFICIENT_PERMISSIONS] Insufficient privileges:
+User does not have permission SELECT on any file. SQLSTATE: 42501
+
+JVM stacktrace:
+org.apache.spark.SparkSecurityException: [INSUFFICIENT_PERMISSIONS] Insufficient privileges:
+User does not have permission SELECT on any file. SQLSTATE: 42501
+	at com.databricks.sql.acl.Unauthorized.throwInsufficientPermissionsError(PermissionChecker.scala:360)
+	at com.databricks.sql.acl.CheckPermissions$.com$databricks$sql$acl$CheckPermissions$$checkAndAudit(CheckPermissions.scala:3034)
+	at com.databricks.sql.acl.CheckPermissions$.checkFilePermissions(CheckPermissions.scala:2936)
+	at com.databricks.sql.acl.CheckPermissions$.checkSelectFilePermission(CheckPermissions.scala:2900)
+	at org.apache.spark.sql.catalyst.analysis.ResolveDataSource.org$apache$spark$sql$catalyst$analysis$ResolveDataSource$$loadV1BatchSource(ResolveDataSource.scala:312)
+	at org.apache.spark.sql.catalyst.analysis.ResolveDataSource$$anonfun$apply$1.$anonfun$applyOrElse$5(ResolveDataSource.scala:120)
+	at scala.Option.getOrElse(Option.scala:201)
+	at org.apache.spark.sql.catalyst.analysis.ResolveDataSource$$anonfun$apply$1.applyOrElse(ResolveDataSource.scala:119)
+	at org.apache.spark.sql.catalyst.analysis.ResolveDataSource$$anonfun$apply$1.applyOrElse(ResolveDataSource.scala:61)
+	at org.apache.spark.sql.catalyst.plans.logical.AnalysisHelper.$anonfun$resolveOperatorsUpWithPruning$3(AnalysisHelper.scala:143)
+	at org.apache.spark.sql.catalyst.trees.CurrentOrigin$.withOrigin(origin.scala:142)
+	at org.apache.spark.sql.catalyst.plans.logical.AnalysisHelper.$anonfun$resolveOperatorsUpWithPruning$1(AnalysisHelper.scala:143)
+	at org.apache.spark.sql.catalyst.plans.logical.AnalysisHelper$.allowInvokingTransformsInAnalyzer(AnalysisHelper.scala:436)
+	at org.apache.spark.sql.catalyst.plans.logical.AnalysisHelper.resolveOperatorsUpWithPruning(AnalysisHelper.scala:139)
+	at org.apache.spark.sql.catalyst.plans.logical.AnalysisHelper.resolveOperatorsUpWithPruning$(AnalysisHelper.scala:135)
+	at org.apache.spark.sql.catalyst.plans.logical.LogicalPlan.resolveOperatorsUpWithPruning(LogicalPlan.scala:48)
+	at org.apache.spark.sql.catalyst.plans.logical.AnalysisHelper.resolveOperatorsUp(AnalysisHelper.scala:116)
+	at org.apache.spark.sql.catalyst.plans.logical.AnalysisHelper.resolveOperatorsUp$(AnalysisHelper.scala:115)
+	at org.apache.spark.sql.catalyst.plans.logical.LogicalPlan.resolveOperatorsUp(LogicalPlan.scala:48)
+	at org.apache.spark.sql.catalyst.analysis.ResolveDataSource.apply(ResolveDataSource.scala:61)
+	at org.apache.spark.sql.catalyst.analysis.ResolveDataSource.apply(ResolveDataSource.scala:59)
+	at org.apache.spark.sql.catalyst.rules.RuleExecutor.$anonfun$execute$17(RuleExecutor.scala:521)
+	at org.apache.spark.sql.catalyst.rules.RecoverableRuleExecutionHelper.processRule(RuleExecutor.scala:675)
+	at org.apache.spark.sql.catalyst.rules.RecoverableRuleExecutionHelper.processRule$(RuleExecutor.scala:659)
+	at org.apache.spark.sql.catalyst.rules.RuleExecutor.processRule(RuleExecutor.scala:155)
+	at org.apache.spark.sql.catalyst.rules.RuleExecutor.$anonfun$execute$16(RuleExecutor.scala:521)
+	at com.databricks.spark.util.MemoryTracker$.withThreadAllocatedBytes(MemoryTracker.scala:51)
+	at org.apache.spark.sql.catalyst.QueryPlanningTracker$.measureRule(QueryPlanningTracker.scala:459)
+	at org.apache.spark.sql.catalyst.rules.RuleExecutor.$anonfun$execute$15(RuleExecutor.scala:519)
+	at com.databricks.spark.util.FrameProfiler$.$anonfun$record$1(FrameProfiler.scala:114)
+	at com.databricks.spark.util.FrameProfilerExporter$.maybeExportFrameProfiler(FrameProfilerExporter.scala:203)
+	at com.databricks.spark.util.FrameProfiler$.record(FrameProfiler.scala:105)
+	at org.apache.spark.sql.catalyst.rules.RuleExecutor.$anonfun$execute$14(RuleExecutor.scala:518)
+	at scala.collection.LinearSeqOps.foldLeft(LinearSeq.scala:183)
+	at scala.collection.LinearSeqOps.foldLeft$(LinearSeq.scala:179)
+	at scala.collection.immutable.List.foldLeft(List.scala:79)
+	at org.apache.spark.sql.catalyst.rules.RuleExecutor.$anonfun$execute$13(RuleExecutor.scala:510)
+	at scala.runtime.java8.JFunction0$mcV$sp.apply(JFunction0$mcV$sp.scala:18)
+	at com.databricks.spark.util.FrameProfiler$.$anonfun$record$1(FrameProfiler.scala:114)
+	at com.databricks.spark.util.FrameProfilerExporter$.maybeExportFrameProfiler(FrameProfilerExporter.scala:203)
+	at com.databricks.spark.util.FrameProfiler$.record(FrameProfiler.scala:105)
+	at org.apache.spark.sql.catalyst.rules.RuleExecutor.executeBatch$1(RuleExecutor.scala:484)
+	at org.apache.spark.sql.catalyst.rules.RuleExecutor.$anonfun$execute$23(RuleExecutor.scala:631)
+	at org.apache.spark.sql.catalyst.rules.RuleExecutor.$anonfun$execute$23$adapted(RuleExecutor.scala:631)
+	at scala.collection.immutable.List.foreach(List.scala:334)
+	at org.apache.spark.sql.catalyst.rules.RuleExecutor.$anonfun$execute$1(RuleExecutor.scala:631)
+	at com.databricks.spark.util.FrameProfiler$.$anonfun$record$1(FrameProfiler.scala:114)
+	at com.databricks.spark.util.FrameProfilerExporter$.maybeExportFrameProfiler(FrameProfilerExporter.scala:203)
+	at com.databricks.spark.util.FrameProfiler$.record(FrameProfiler.scala:105)
+	at org.apache.spark.sql.catalyst.rules.RuleExecutor.execute(RuleExecutor.scala:377)
+	at org.apache.spark.sql.catalyst.analysis.Analyzer.super$execute(Analyzer.scala:754)
+	at org.apache.spark.sql.catalyst.analysis.Analyzer.$anonfun$executeSameContext$1(Analyzer.scala:754)
+	at com.databricks.sql.unity.SAMSnapshotHelper$.visitPlansDuringAnalysis(SAMSnapshotHelper.scala:43)
+	at org.apache.spark.sql.catalyst.analysis.Analyzer.executeSameContext(Analyzer.scala:753)
+	at org.apache.spark.sql.catalyst.analysis.Analyzer.$anonfun$execute$1(Analyzer.scala:726)
+	at org.apache.spark.sql.catalyst.analysis.AnalysisContext$.withNewAnalysisContext(Analyzer.scala:546)
+	at org.apache.spark.sql.catalyst.analysis.Analyzer.execute(Analyzer.scala:726)
+	at org.apache.spark.sql.catalyst.analysis.Analyzer.execute(Analyzer.scala:636)
+	at org.apache.spark.sql.catalyst.rules.RuleExecutor.$anonfun$executeAndTrack$1(RuleExecutor.scala:365)
+	at org.apache.spark.sql.catalyst.QueryPlanningTracker$.withTracker(QueryPlanningTracker.scala:284)
+	at org.apache.spark.sql.catalyst.rules.RuleExecutor.executeAndTrack(RuleExecutor.scala:365)
+	at org.apache.spark.sql.catalyst.analysis.resolver.HybridAnalyzer.resolveInFixedPoint(HybridAnalyzer.scala:416)
+	at org.apache.spark.sql.catalyst.analysis.resolver.HybridAnalyzer.$anonfun$apply$1(HybridAnalyzer.scala:99)
+	at org.apache.spark.sql.catalyst.analysis.resolver.HybridAnalyzer.withTrackedAnalyzerBridgeState(HybridAnalyzer.scala:136)
+	at org.apache.spark.sql.catalyst.analysis.resolver.HybridAnalyzer.apply(HybridAnalyzer.scala:92)
+	at org.apache.spark.sql.catalyst.analysis.Analyzer.$anonfun$executeAndCheck$2(Analyzer.scala:703)
+	at org.apache.spark.sql.catalyst.plans.logical.AnalysisHelper$.markInAnalyzer(AnalysisHelper.scala:443)
+	at org.apache.spark.sql.catalyst.analysis.Analyzer.$anonfun$executeAndCheck$1(Analyzer.scala:703)
+	at com.databricks.sql.unity.SAMSnapshotHelper$.visitPlansDuringAnalysis(SAMSnapshotHelper.scala:43)
+	at org.apache.spark.sql.catalyst.analysis.Analyzer.executeAndCheck(Analyzer.scala:692)
+	at org.apache.spark.sql.execution.QueryExecution.$anonfun$lazyAnalyzed$4(QueryExecution.scala:716)
+	at org.apache.spark.sql.catalyst.QueryPlanningTracker$.measureRule(QueryPlanningTracker.scala:464)
+	at org.apache.spark.sql.catalyst.QueryPlanningTracker$.recordLatency(QueryPlanningTracker.scala:473)
+	at org.apache.spark.sql.execution.QueryExecution.$anonfun$lazyAnalyzed$3(QueryExecution.scala:717)
+	at com.databricks.spark.util.FrameProfiler$.$anonfun$record$1(FrameProfiler.scala:114)
+	at com.databricks.spark.util.FrameProfilerExporter$.maybeExportFrameProfiler(FrameProfilerExporter.scala:203)
+	at com.databricks.spark.util.FrameProfiler$.record(FrameProfiler.scala:105)
+	at org.apache.spark.sql.catalyst.QueryPlanningTracker.measurePhase(QueryPlanningTracker.scala:1070)
+	at org.apache.spark.sql.execution.QueryExecution.$anonfun$executePhase$8(QueryExecution.scala:1218)
+	at org.apache.spark.sql.execution.SQLExecution$.$anonfun$withExecutionPhase$1(SQLExecution.scala:362)
+	at com.databricks.logging.AttributionContext$.$anonfun$withValue$1(AttributionContext.scala:349)
+	at scala.util.DynamicVariable.withValue(DynamicVariable.scala:59)
+	at com.databricks.logging.AttributionContext$.withValue(AttributionContext.scala:345)
+	at com.databricks.util.TracingSpanUtils$.$anonfun$withTracing$4(TracingSpanUtils.scala:247)
+	at com.databricks.util.TracingSpanUtils$.withTracing(TracingSpanUtils.scala:131)
+	at com.databricks.util.TracingSpanUtils$.withTracing(TracingSpanUtils.scala:245)
+	at com.databricks.spark.util.DatabricksTracingHelper.withSpan(DatabricksSparkTracingHelper.scala:154)
+	at com.databricks.spark.util.DBRTracing$.withSpan(DBRTracing.scala:87)
+	at org.apache.spark.sql.execution.SQLExecution$.withExecutionPhase(SQLExecution.scala:343)
+	at org.apache.spark.sql.execution.QueryExecution.$anonfun$executePhase$7(QueryExecution.scala:1218)
+	at org.apache.spark.sql.execution.QueryExecution$.withInternalError(QueryExecution.scala:1970)
+	at org.apache.spark.sql.execution.QueryExecution.$anonfun$executePhase$5(QueryExecution.scala:1209)
+	at com.databricks.util.LexicalThreadLocal$Handle.runWith(LexicalThreadLocal.scala:63)
+	at org.apache.spark.sql.execution.QueryExecution.$anonfun$executePhase$4(QueryExecution.scala:1206)
+	at com.databricks.util.LexicalThreadLocal$Handle.runWith(LexicalThreadLocal.scala:63)
+	at org.apache.spark.sql.execution.QueryExecution.$anonfun$executePhase$3(QueryExecution.scala:1206)
+	at com.databricks.util.LexicalThreadLocal$Handle.runWith(LexicalThreadLocal.scala:63)
+	at org.apache.spark.sql.execution.QueryExecution.$anonfun$executePhase$2(QueryExecution.scala:1205)
+	at com.databricks.util.LexicalThreadLocal$Handle.runWith(LexicalThreadLocal.scala:63)
+	at org.apache.spark.sql.execution.QueryExecution.localBlock$1(QueryExecution.scala:1186)
+	at org.apache.spark.sql.execution.QueryExecution.$anonfun$withQueryExecutionId$4(QueryExecution.scala:1196)
+	at com.databricks.unity.UCSManager$.withTemporaryScope(UCSManager.scala:168)
+	at org.apache.spark.sql.execution.QueryExecution.$anonfun$withQueryExecutionId$3(QueryExecution.scala:1195)
+	at org.apache.spark.sql.execution.QueryExecution$.$anonfun$runWithWrappers$2(QueryExecution.scala:2223)
+	at org.apache.spark.sql.execution.QueryExecution$.org$apache$spark$sql$execution$QueryExecution$$runWithWrappers(QueryExecution.scala:2222)
+	at org.apache.spark.sql.execution.QueryExecution.withQueryExecutionId(QueryExecution.scala:1196)
+	at org.apache.spark.sql.execution.QueryExecution.$anonfun$executePhase$1(QueryExecution.scala:1204)
+	at org.apache.spark.sql.SparkSession.withActive(SparkSession.scala:866)
+	at org.apache.spark.sql.execution.QueryExecution.executePhase(QueryExecution.scala:1203)
+	at org.apache.spark.sql.execution.QueryExecution.$anonfun$lazyAnalyzed$2(QueryExecution.scala:708)
+	at com.databricks.sql.util.MemoryTrackerHelper.withMemoryTracking(MemoryTrackerHelper.scala:111)
+	at org.apache.spark.sql.execution.QueryExecution.$anonfun$lazyAnalyzed$1(QueryExecution.scala:707)
+	at scala.util.Try$.apply(Try.scala:217)
+	at org.apache.spark.util.Utils$.doTryWithCallerStacktrace(Utils.scala:1796)
+	at org.apache.spark.util.Utils$.getTryWithCallerStacktrace(Utils.scala:1846)
+	at org.apache.spark.util.LazyTry.get(LazyTry.scala:78)
+	at org.apache.spark.sql.execution.QueryExecution.analyzed(QueryExecution.scala:804)
+	at org.apache.spark.sql.execution.QueryExecution.assertAnalyzed(QueryExecution.scala:630)
+	at org.apache.spark.sql.classic.Dataset$.$anonfun$ofRows$1(Dataset.scala:132)
+	at org.apache.spark.sql.SparkSession.withActive(SparkSession.scala:866)
+	at org.apache.spark.sql.classic.SparkSession.$anonfun$withActiveAndFrameProfiler$1(SparkSession.scala:1332)
+	at com.databricks.spark.util.FrameProfiler$.$anonfun$record$1(FrameProfiler.scala:114)
+	at com.databricks.spark.util.FrameProfilerExporter$.maybeExportFrameProfiler(FrameProfilerExporter.scala:203)
+	at com.databricks.spark.util.FrameProfiler$.record(FrameProfiler.scala:105)
+	at org.apache.spark.sql.classic.SparkSession.withActiveAndFrameProfiler(SparkSession.scala:1332)
+	at org.apache.spark.sql.classic.Dataset$.ofRows(Dataset.scala:130)
+	at org.apache.spark.sql.classic.DataFrameReader.load(DataFrameReader.scala:170)
+	at org.apache.spark.sql.classic.DataFrameReader.load(DataFrameReader.scala:148)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:77)
+	at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:569)
+	at py4j.reflection.MethodInvoker.invoke(MethodInvoker.java:244)
+	at py4j.reflection.ReflectionEngine.invoke(ReflectionEngine.java:397)
+	at py4j.Gateway.invoke(Gateway.java:306)
+	at py4j.commands.AbstractCommand.invokeMethod(AbstractCommand.java:132)
+	at py4j.commands.CallCommand.execute(CallCommand.java:79)
+	at py4j.ClientServerConnection.sendCommand(ClientServerConnection.java:259)
+	at py4j.CallbackClient.sendCommand(CallbackClient.java:384)
+	at py4j.CallbackClient.sendCommand(CallbackClient.java:356)
+	at py4j.reflection.PythonProxyHandler.invoke(PythonProxyHandler.java:106)
+	at jdk.proxy5/jdk.proxy5.$Proxy133.call(Unknown Source)
+	at com.databricks.pipelines.PythonQueryFunctionHelpers$$anon$1.call(DatasetBuilder.scala:921)
+	at com.databricks.pipelines.DatasetBuilderUtils$DatasetBuilderImpl.$anonfun$query$2(DatasetBuilderUtils.scala:399)
+	at com.databricks.pipelines.DatasetBuilderUtils$DatasetBuilderImpl.$anonfun$queryInternal$2(DatasetBuilderUtils.scala:417)
+	at com.databricks.pipelines.util.FlowFunctionUtil$$anon$1.$anonfun$call$5(FlowFunctionUtil.scala:45)
+	at com.databricks.spark.util.FrameProfiler$.$anonfun$record$1(FrameProfiler.scala:114)
+	at com.databricks.spark.util.FrameProfilerExporter$.maybeExportFrameProfiler(FrameProfilerExporter.scala:203)
+	at com.databricks.spark.util.FrameProfiler$.record(FrameProfiler.scala:105)
+	at com.databricks.sql.transaction.tahoe.metering.DeltaLogging.recordFrameProfile(DeltaLogging.scala:947)
+	at com.databricks.sql.transaction.tahoe.metering.DeltaLogging.recordFrameProfile$(DeltaLogging.scala:945)
+	at com.databricks.pipelines.util.FlowFunctionUtil$.recordFrameProfile(FlowFunctionUtil.scala:15)
+	at com.databricks.pipelines.util.FlowFunctionUtil$$anon$1.$anonfun$call$4(FlowFunctionUtil.scala:43)
+	at com.databricks.pipelines.ThreadLocalPipelineContextStack.withContext(Pipeline.scala:210)
+	at com.databricks.pipelines.Pipeline.withContext(Pipeline.scala:428)
+	at com.databricks.pipelines.util.FlowFunctionUtil$$anon$1.$anonfun$call$3(FlowFunctionUtil.scala:43)
+	at scala.util.Try$.apply(Try.scala:217)
+	at com.databricks.pipelines.util.FlowFunctionUtil$$anon$1.$anonfun$call$1(FlowFunctionUtil.scala:41)
+	at com.databricks.pipelines.graph.DltApiUsageLogging$.$anonfun$recordPipelinesOperation$3(DltApiUsageLogging.scala:91)
+	at com.databricks.pipelines.graph.DltApiUsageLogging$.$anonfun$recordPipelinesOperation$6(DltApiUsageLogging.scala:115)
+	at com.databricks.logging.UsageLogging.$anonfun$recordOperation$1(UsageLogging.scala:531)
+	at com.databricks.logging.UsageLogging.executeThunkAndCaptureResultTags$1(UsageLogging.scala:669)
+	at com.databricks.logging.UsageLogging.$anonfun$recordOperationWithResultTags$6(UsageLogging.scala:696)
+	at com.databricks.logging.AttributionContextTracing.$anonfun$withAttributionContext$1(AttributionContextTracing.scala:146)
+	at com.databricks.logging.AttributionContext$.$anonfun$withValue$1(AttributionContext.scala:349)
+	at scala.util.DynamicVariable.withValue(DynamicVariable.scala:59)
+	at com.databricks.logging.AttributionContext$.withValue(AttributionContext.scala:345)
+	at com.databricks.logging.AttributionContextTracing.withAttributionContext(AttributionContextTracing.scala:144)
+	at com.databricks.logging.AttributionContextTracing.withAttributionContext$(AttributionContextTracing.scala:141)
+	at com.databricks.pipelines.graph.DltApiUsageLogging$.withAttributionContext(DltApiUsageLogging.scala:34)
+	at com.databricks.logging.AttributionContextTracing.withAttributionTags(AttributionContextTracing.scala:201)
+	at com.databricks.logging.AttributionContextTracing.withAttributionTags$(AttributionContextTracing.scala:182)
+	at com.databricks.pipelines.graph.DltApiUsageLogging$.withAttributionTags(DltApiUsageLogging.scala:34)
+	at com.databricks.logging.UsageLogging.$anonfun$recordOperationWithResultTags$5(UsageLogging.scala:664)
+	at com.databricks.logging.UsageLogging.withOtelSpanInContext$1(UsageLogging.scala:656)
+	at com.databricks.logging.UsageLogging.recordOperationWithResultTags(UsageLogging.scala:659)
+	at com.databricks.logging.UsageLogging.recordOperationWithResultTags$(UsageLogging.scala:540)
+	at com.databricks.pipelines.graph.DltApiUsageLogging$.recordOperationWithResultTags(DltApiUsageLogging.scala:34)
+	at com.databricks.logging.UsageLogging.recordOperation(UsageLogging.scala:532)
+	at com.databricks.logging.UsageLogging.recordOperation$(UsageLogging.scala:496)
+	at com.databricks.pipelines.graph.DltApiUsageLogging$.recordOperation(DltApiUsageLogging.scala:34)
+	at com.databricks.pipelines.graph.DltApiUsageLogging$.$anonfun$recordPipelinesOperation$1(DltApiUsageLogging.scala:102)
+	at com.databricks.spark.util.FrameProfiler$.$anonfun$record$1(FrameProfiler.scala:114)
+	at com.databricks.spark.util.FrameProfilerExporter$.maybeExportFrameProfiler(FrameProfilerExporter.scala:203)
+	at com.databricks.spark.util.FrameProfiler$.record(FrameProfiler.scala:105)
+	at com.databricks.pipelines.graph.DltApiUsageLogging$.recordPipelinesOperation(DltApiUsageLogging.scala:79)
+	at com.databricks.pipelines.util.FlowFunctionUtil$$anon$1.call(FlowFunctionUtil.scala:30)
+	at com.databricks.pipelines.graph.FlowFunction$$anon$3.call(Flow.scala:788)
+	at com.databricks.pipelines.graph.FlowFunction.$anonfun$callWithCache$1(Flow.scala:701)
+	at scala.collection.immutable.Map$EmptyMap$.getOrElse(Map.scala:246)
+	at com.databricks.pipelines.graph.FlowFunction.callWithCache(Flow.scala:699)
+	at com.databricks.pipelines.graph.FlowFunction.callWithCache$(Flow.scala:683)
+	at com.databricks.pipelines.graph.FlowFunction$$anon$3.callWithCache(Flow.scala:781)
+	at com.databricks.pipelines.graph.Flow.$anonfun$resolveFlowInternal$4(Flow.scala:315)
+	at com.databricks.pipelines.util.SparkSessionUtils$.withSQLConf(SparkSessionUtils.scala:21)
+	at com.databricks.pipelines.util.SparkSessionUtils$.withNewSparkSession(SparkSessionUtils.scala:43)
+	at com.databricks.pipelines.graph.Flow.resolveFlowInternal(Flow.scala:310)
+	at com.databricks.pipelines.graph.Flow.resolveFlowInternal$(Flow.scala:261)
+	at com.databricks.pipelines.graph.UnresolvedFlow.resolveFlowInternal(Flow.scala:864)
+	at com.databricks.pipelines.graph.UnresolvedFlow.resolveFlow(Flow.scala:950)
+	at com.databricks.pipelines.graph.UnresolvedFlow.resolveFlow(Flow.scala:864)
+	at com.databricks.pipelines.execution.core.dataflow.FlowResolver.$anonfun$resolveFlowInternal$1(CoreDataflowNodeProcessor.scala:1683)
+	at com.databricks.pipelines.graph.DltApiUsageLogging$.$anonfun$recordPipelinesOperation$3(DltApiUsageLogging.scala:91)
+	at com.databricks.pipelines.common.monitoring.OperationStatusReporter.executeWithPeriodicReporting(OperationStatusReporter.scala:150)
+	at com.databricks.pipelines.common.monitoring.OperationStatusReporter$.executeWithPeriodicReporting(OperationStatusReporter.scala:197)
+	at com.databricks.pipelines.graph.DltApiUsageLogging$.$anonfun$recordPipelinesOperation$6(DltApiUsageLogging.scala:113)
+	at com.databricks.logging.UsageLogging.$anonfun$recordOperation$1(UsageLogging.scala:531)
+	at com.databricks.logging.UsageLogging.executeThunkAndCaptureResultTags$1(UsageLogging.scala:669)
+	at com.databricks.logging.UsageLogging.$anonfun$recordOperationWithResultTags$6(UsageLogging.scala:696)
+	at com.databricks.logging.AttributionContextTracing.$anonfun$withAttributionContext$1(AttributionContextTracing.scala:146)
+	at com.databricks.logging.AttributionContext$.$anonfun$withValue$1(AttributionContext.scala:349)
+	at scala.util.DynamicVariable.withValue(DynamicVariable.scala:59)
+	at com.databricks.logging.AttributionContext$.withValue(AttributionContext.scala:345)
+	at com.databricks.logging.AttributionContextTracing.withAttributionContext(AttributionContextTracing.scala:144)
+	at com.databricks.logging.AttributionContextTracing.withAttributionContext$(AttributionContextTracing.scala:141)
+	at com.databricks.pipelines.graph.DltApiUsageLogging$.withAttributionContext(DltApiUsageLogging.scala:34)
+	at com.databricks.logging.AttributionContextTracing.withAttributionTags(AttributionContextTracing.scala:201)
+	at com.databricks.logging.AttributionContextTracing.withAttributionTags$(AttributionContextTracing.scala:182)
+	at com.databricks.pipelines.graph.DltApiUsageLogging$.withAttributionTags(DltApiUsageLogging.scala:34)
+	at com.databricks.logging.UsageLogging.$anonfun$recordOperationWithResultTags$5(UsageLogging.scala:664)
+	at com.databricks.logging.UsageLogging.withOtelSpanInContext$1(UsageLogging.scala:656)
+	at com.databricks.logging.UsageLogging.recordOperationWithResultTags(UsageLogging.scala:659)
+	at com.databricks.logging.UsageLogging.recordOperationWithResultTags$(UsageLogging.scala:540)
+	at com.databricks.pipelines.graph.DltApiUsageLogging$.recordOperationWithResultTags(DltApiUsageLogging.scala:34)
+	at com.databricks.logging.UsageLogging.recordOperation(UsageLogging.scala:532)
+	at com.databricks.logging.UsageLogging.recordOperation$(UsageLogging.scala:496)
+	at com.databricks.pipelines.graph.DltApiUsageLogging$.recordOperation(DltApiUsageLogging.scala:34)
+	at com.databricks.pipelines.graph.DltApiUsageLogging$.$anonfun$recordPipelinesOperation$1(DltApiUsageLogging.scala:102)
+	at com.databricks.spark.util.FrameProfiler$.$anonfun$record$1(FrameProfiler.scala:114)
+	at com.databricks.spark.util.FrameProfilerExporter$.maybeExportFrameProfiler(FrameProfilerExporter.scala:203)
+	at com.databricks.spark.util.FrameProfiler$.record(FrameProfiler.scala:105)
+	at com.databricks.pipelines.graph.DltApiUsageLogging$.recordPipelinesOperation(DltApiUsageLogging.scala:79)
+	at com.databricks.pipelines.execution.core.dataflow.FlowResolver.resolveFlowInternal(CoreDataflowNodeProcessor.scala:1679)
+	at com.databricks.pipelines.execution.core.dataflow.FlowResolver.$anonfun$resolveFlowWithLock$1(CoreDataflowNodeProcessor.scala:1394)
+	at com.databricks.pipelines.execution.core.dataflow.PythonFileLockUtil.withFileLock(PythonFileLockUtil.scala:116)
+	at com.databricks.pipelines.execution.core.dataflow.FlowResolver.resolveFlowWithLock(CoreDataflowNodeProcessor.scala:1391)
+	at com.databricks.pipelines.execution.core.dataflow.FlowResolver.attemptResolveFlow(CoreDataflowNodeProcessor.scala:1369)
+	at com.databricks.pipelines.execution.core.dataflow.CoreDataflowNodeProcessor.$anonfun$processNode$3(CoreDataflowNodeProcessor.scala:545)
+	at com.databricks.spark.util.FrameProfiler$.$anonfun$record$1(FrameProfiler.scala:114)
+	at com.databricks.spark.util.FrameProfilerExporter$.maybeExportFrameProfiler(FrameProfilerExporter.scala:203)
+	at com.databricks.spark.util.FrameProfiler$.record(FrameProfiler.scala:105)
+	at com.databricks.pipelines.execution.core.dataflow.CoreDataflowNodeProcessor.$anonfun$processNode$2(CoreDataflowNodeProcessor.scala:516)
+	at scala.Option.getOrElse(Option.scala:201)
+	at com.databricks.pipelines.execution.core.dataflow.CoreDataflowNodeProcessor.processNode(CoreDataflowNodeProcessor.scala:516)
+	at com.databricks.pipelines.execution.core.UpdateExecution$.$anonfun$decomposition$3(UpdateExecution.scala:4274)
+	at com.databricks.pipelines.execution.core.dataflow.DataflowGraphTransformer$CancellableTransformer$.$anonfun$from$1(DataflowGraphTransformer.scala:73)
+	at com.databricks.pipelines.execution.core.dataflow.DataflowGraphTransformer$CancellableTransformer.apply(DataflowGraphTransformer.scala:67)
+	at com.databricks.pipelines.execution.core.dataflow.DataflowGraphTransformer.$anonfun$transformDownNodes$9(DataflowGraphTransformer.scala:552)
+	at scala.runtime.java8.JFunction0$mcV$sp.apply(JFunction0$mcV$sp.scala:18)
+	at scala.concurrent.Future$.$anonfun$apply$1(Future.scala:687)
+	at scala.concurrent.impl.Promise$Transformation.run(Promise.scala:467)
+	at com.databricks.pipelines.execution.core.CommandContextUtils$$anon$2.$anonfun$run$3(CommandContextUtils.scala:277)
+	at scala.runtime.java8.JFunction0$mcV$sp.apply(JFunction0$mcV$sp.scala:18)
+	at com.databricks.pipelines.execution.core.CommandContextUtils$.withCommandContext(CommandContextUtils.scala:230)
+	at com.databricks.pipelines.execution.core.CommandContextUtils$$anon$2.$anonfun$run$2(CommandContextUtils.scala:277)
+	at scala.runtime.java8.JFunction0$mcV$sp.apply(JFunction0$mcV$sp.scala:18)
+	at com.databricks.util.LexicalThreadLocal$Handle.runWith(LexicalThreadLocal.scala:63)
+	at com.databricks.pipelines.execution.core.CommandContextUtils$$anon$2.run(CommandContextUtils.scala:276)
+	at org.apache.spark.util.threads.SparkThreadLocalCapturingRunnable.$anonfun$run$1(SparkThreadLocalForwardingThreadPoolExecutor.scala:171)
+	at scala.runtime.java8.JFunction0$mcV$sp.apply(JFunction0$mcV$sp.scala:18)
+	at com.databricks.logging.AttributionContext$.$anonfun$withValue$1(AttributionContext.scala:349)
+	at scala.util.DynamicVariable.withValue(DynamicVariable.scala:59)
+	at com.databricks.logging.AttributionContext$.withValue(AttributionContext.scala:345)
+	at com.databricks.spark.util.DatabricksTracingHelper.$anonfun$withSpanFromParent$4(DatabricksSparkTracingHelper.scala:106)
+	at com.databricks.util.TracingSpanUtils$.withTracing(TracingSpanUtils.scala:131)
+	at com.databricks.spark.util.DatabricksTracingHelper.withSpanFromParent(DatabricksSparkTracingHelper.scala:104)
+	at com.databricks.spark.util.DBRTracing$.withSpanFromParent(DBRTracing.scala:68)
+	at org.apache.spark.util.threads.SparkThreadLocalCapturingHelper.$anonfun$runWithCaptured$7(SparkThreadLocalForwardingThreadPoolExecutor.scala:124)
+	at com.databricks.util.LexicalThreadLocal$Handle.runWith(LexicalThreadLocal.scala:63)
+	at org.apache.spark.util.threads.SparkThreadLocalCapturingHelper.$anonfun$runWithCaptured$6(SparkThreadLocalForwardingThreadPoolExecutor.scala:123)
+	at com.databricks.sql.transaction.tahoe.mst.MSTThreadHelper$.runWithMSTContext(MSTThreadHelper.scala:77)
+	at org.apache.spark.util.threads.SparkThreadLocalCapturingHelper.$anonfun$runWithCaptured$5(SparkThreadLocalForwardingThreadPoolExecutor.scala:120)
+	at com.databricks.spark.util.IdentityClaim$.withClaim(IdentityClaim.scala:48)
+	at org.apache.spark.util.threads.SparkThreadLocalCapturingHelper.$anonfun$runWithCaptured$4(SparkThreadLocalForwardingThreadPoolExecutor.scala:119)
+	at com.databricks.unity.UCSEphemeralState$Handle.runWith(UCSEphemeralState.scala:51)
+	at org.apache.spark.util.threads.SparkThreadLocalCapturingHelper.runWithCaptured(SparkThreadLocalForwardingThreadPoolExecutor.scala:118)
+	at org.apache.spark.util.threads.SparkThreadLocalCapturingHelper.runWithCaptured$(SparkThreadLocalForwardingThreadPoolExecutor.scala:95)
+	at org.apache.spark.util.threads.SparkThreadLocalCapturingRunnable.runWithCaptured(SparkThreadLocalForwardingThreadPoolExecutor.scala:168)
+	at org.apache.spark.util.threads.SparkThreadLocalCapturingRunnable.run(SparkThreadLocalForwardingThreadPoolExecutor.scala:171)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1136)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:635)
+	at java.base/java.lang.Thread.run(Thread.java:840)
+
+
+2ND ERROR
+UnboundLocalError: Traceback (most recent call last):
+  File "REDACTED_LOCAL_PART@indusind.com/New Pipeline 2026-09-18 09:57/advances_data_code", cell 5, line 17, in raw_data_with_row_number
+
+
+UnboundLocalError: cannot access local variable 'raw_data' where it is not associated with a value
+
+3RD ERROR
+UnboundLocalError: Traceback (most recent call last):
+  File "REDACTED_LOCAL_PART@indusind.com/New Pipeline 2026-09-18 09:57/advances_data_code", cell 5, line 51, in cleaned_data
+
+
+UnboundLocalError: cannot access local variable 'raw_data_with_row_number' where it is not associated with a value
+
+AttributeError: Traceback (most recent call last):
+  File "REDACTED_LOCAL_PART@indusind.com/New Pipeline 2026-09-18 09:57/advances_data_code", cell 5, line 103, in jr_advances_data
+
+
+AttributeError: 'LegacyInvocationResult' object has no attribute 'withColumn'
