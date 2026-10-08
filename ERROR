@@ -1,7 +1,4 @@
-
-INFO: 10.136.65.250:0 - "POST /api/upload HTTP/1.1" 500 Internal Server Error
-
-INFO: 10.136.65.250:0 - "POST /api/upload HTTP/1.1" 500 Internal Server ErrorERROR:    Exception in ASGI application
+ERROR:    Exception in ASGI application
 Traceback (most recent call last):
   File "/app/python/source_code/.venv/lib/python3.11/site-packages/uvicorn/protocols/http/httptools_impl.py", line 401, in run_asgi
     result = await app(  # type: ignore[func-returns-value]
@@ -45,7 +42,7 @@ Traceback (most recent call last):
     return await dependant.call(**values)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "/app/python/source_code/app.py", line 129, in upload_pdf
-    w_user.files.upload(dest_path, SizedBytesIO(contents), overwrite=True)
+    w_user.files.upload(dest_path,contents, overwrite=True)
   File "/app/python/source_code/.venv/lib/python3.11/site-packages/databricks/sdk/service/files.py", line 968, in upload
     self._api.do('PUT',
   File "/app/python/source_code/.venv/lib/python3.11/site-packages/databricks/sdk/core.py", line 157, in do
@@ -71,6 +68,7 @@ Traceback (most recent call last):
   File "/app/python/source_code/.venv/lib/python3.11/site-packages/databricks/sdk/logger/round_trip_logger.py", line 109, in _redacted_dump
     tmp = json.loads(body)
           ^^^^^^^^^^^^^^^^
-  File "/usr/lib/python3.11/json/__init__.py", line 339, in loads
-    raise TypeError(f'the JSON object must be str, bytes or bytearray, '
-TypeError: the JSON object must be str, bytes or bytearray, not SizedBytesIO
+  File "/usr/lib/python3.11/json/__init__.py", line 341, in loads
+    s = s.decode(detect_encoding(s), 'surrogatepass')
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe2 in position 10: invalid continuation byte
